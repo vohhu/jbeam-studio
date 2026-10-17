@@ -1,0 +1,2 @@
+The files in vehicles/square_donut come from the tests of BeamNG/Blender-JBeam-Editor
+(https://github.com/BeamNG/Blender-JBeam-Editor) and are licensed under CC0 1.0 Universal.

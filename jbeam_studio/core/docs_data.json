@@ -1,0 +1,613 @@
+{
+ "source": "BeamNG/vscode-jbeam-editor src/docHelper.js, MIT License, Copyright 2023 BeamNG GmbH - Thomas Fischer",
+ "entries": [
+  {
+   "section": "nodes",
+   "key": "id",
+   "description": "Defines the node name. **Need to be unique** for the whole vehicle",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_id"
+  },
+  {
+   "section": "nodes",
+   "key": "posX",
+   "description": "The X (left/right) position in 3D space. Left is positive, right is negative",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_posX"
+  },
+  {
+   "section": "nodes",
+   "key": "posY",
+   "description": "The Y (forward/back) position in 3D space. Backward is positive, forward is negative",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_posY"
+  },
+  {
+   "section": "nodes",
+   "key": "posZ",
+   "description": "The Z (up/down) position in 3D space. Up is positive, down is negative",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_posZ"
+  },
+  {
+   "section": "nodes",
+   "key": "nodeWeight",
+   "description": "The weight of the node in kg",
+   "type": "number",
+   "default": "options.nodeWeight",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_nodeWeight"
+  },
+  {
+   "section": "nodes",
+   "key": "collision",
+   "description": "If the node can collide with anything. True by default",
+   "type": "boolean",
+   "default": "true",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_collision"
+  },
+  {
+   "section": "nodes",
+   "key": "selfCollision",
+   "description": "If the node can collide with the vehicle it belongs to. False by default",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_selfCollision"
+  },
+  {
+   "section": "nodes",
+   "key": "staticCollision",
+   "description": "If the node can collide with map objects and terrain. True by default",
+   "type": "boolean",
+   "default": "true",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_staticCollision"
+  },
+  {
+   "section": "nodes",
+   "key": "group",
+   "description": "Groups a set of nodes into a group that can be used later in other sections",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_group"
+  },
+  {
+   "section": "nodes",
+   "key": "engineGroup",
+   "description": "A different kind of group, related to powertrain simulation",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_engineGroup"
+  },
+  {
+   "section": "nodes",
+   "key": "frictionCoef",
+   "description": "Static friction of the node. Default is 1",
+   "type": "number",
+   "default": "1",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_frictionCoef"
+  },
+  {
+   "section": "nodes",
+   "key": "slidingFrictionCoef",
+   "description": "Sliding friction of the node. Defaults to the same value as static friction",
+   "type": "number",
+   "default": "frictionCoef",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_slidingFrictionCoef"
+  },
+  {
+   "section": "nodes",
+   "key": "nodeMaterial",
+   "description": "Physics material of the node, rubber, metal, etc.",
+   "type": "string",
+   "default": "options.nodeMaterial",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_nodeMaterial"
+  },
+  {
+   "section": "nodes",
+   "key": "impactGenericEvent",
+   "description": "Overrides the node's generic impact sound event",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_impactGenericEvent"
+  },
+  {
+   "section": "nodes",
+   "key": "impactMetalEvent",
+   "description": "Overrides the node's metal impact sound event",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_impactMetalEvent"
+  },
+  {
+   "section": "nodes",
+   "key": "impactPlasticEvent",
+   "description": "Overrides the node's plastic impact sound event",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_impactPlasticEvent"
+  },
+  {
+   "section": "nodes",
+   "key": "fixed",
+   "description": "If the node is fixed in 3D space (Can’t move at all). False by default",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_fixed"
+  },
+  {
+   "section": "nodes",
+   "key": "noLoadCoef",
+   "description": "The friction coefficient modifier on zero load. Used by tires",
+   "type": "float",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_noLoadCoef"
+  },
+  {
+   "section": "nodes",
+   "key": "fullLoadCoef",
+   "description": "The friction coefficient modifier on full load. Used by tires",
+   "type": "float",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_fullLoadCoef"
+  },
+  {
+   "section": "nodes",
+   "key": "stribeckExponent",
+   "description": "Allows finer control of the sliding friction curve. Default is 1.75. Used by tires",
+   "type": "float",
+   "default": "1.75",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_stribeckExponent"
+  },
+  {
+   "section": "nodes",
+   "key": "stribeckVelMult",
+   "description": "Allows finer control of the sliding friction curve. Affects the velocity at which the sliding coefficient will apply. Used by tires",
+   "type": "float",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_stribeckVelMult"
+  },
+  {
+   "section": "nodes",
+   "key": "softnessCoef",
+   "description": "Affects tire squeal. Default is 0.6. Used by tires",
+   "type": "float",
+   "default": "0.6",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_softnessCoef"
+  },
+  {
+   "section": "nodes",
+   "key": "treadCoef",
+   "description": "Multiplies ground roughness coefficient for this node. Default is 1. Used by tires",
+   "type": "float",
+   "default": "1",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_treadCoef"
+  },
+  {
+   "section": "nodes",
+   "key": "loadSensitivitySlope",
+   "description": "The loss of coef per newton of normal force. Used by tires",
+   "type": "float",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_loadSensitivitySlope"
+  },
+  {
+   "section": "nodes",
+   "key": "pairedNode",
+   "description": "Groups the inner and outer tire nodes into pairs. Used by tires",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/nodes/#args_pairedNode"
+  },
+  {
+   "section": "slotType",
+   "key": "",
+   "description": "The slot type of this part. It decides into which slots the part fits. Can also be a list of slot types",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots2",
+   "key": "name",
+   "description": "The name of the slot. **Need to be unique** inside the part. Part config (PC) files reference this name",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots2",
+   "key": "allowTypes",
+   "description": "List of slot types that fit into this slot. Replaces the single `type` of the old `slots` section",
+   "type": "list",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots2",
+   "key": "denyTypes",
+   "description": "List of slot types that are rejected, even when `allowTypes` accepts them. Use an empty list `[]` if nothing is rejected",
+   "type": "list",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots2",
+   "key": "default",
+   "description": "Name of the part that fills this slot when nothing else is chosen. Use an empty string for an empty slot",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots2",
+   "key": "description",
+   "description": "The slot name shown to the player in the vehicle config UI",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots2",
+   "key": "coreSlot",
+   "description": "If true, the player can not empty this slot in the vehicle config UI",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots",
+   "key": "type",
+   "description": "The slot type that fits into this slot. Legacy section, use `slots2` with `name` and `allowTypes` instead",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots",
+   "key": "default",
+   "description": "Name of the part that fills this slot when nothing else is chosen. Use an empty string for an empty slot",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "slots",
+   "key": "description",
+   "description": "The slot name shown to the player in the vehicle config UI",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/slots/"
+  },
+  {
+   "section": "beams",
+   "key": "id1",
+   "description": "Name of the first node",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_id1"
+  },
+  {
+   "section": "beams",
+   "key": "id2",
+   "description": "Name of the second node",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_id2"
+  },
+  {
+   "section": "beams",
+   "key": "beamType",
+   "description": "Sets the type of the beam. Possible values: NORMAL, HYDRO, ANISOTROPIC, BOUNDED, PRESSURED, SUPPORT, BROKEN, LBEAM",
+   "type": "string",
+   "default": "NORMAL",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamType"
+  },
+  {
+   "section": "beams",
+   "key": "beamSpring",
+   "description": "Rigidity of the beam (N/m).",
+   "type": "number",
+   "default": "4300000",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamSpring"
+  },
+  {
+   "section": "beams",
+   "key": "beamDamp",
+   "description": "Damping of the beam (N/m/s).",
+   "type": "number",
+   "default": "580",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamDamp"
+  },
+  {
+   "section": "beams",
+   "key": "beamStrength",
+   "description": "Strength of the beam. (N). A value of 'FLT_MAX' will result in an unbreakable beam.",
+   "type": "number",
+   "default": "FLT_MAX",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamStrength"
+  },
+  {
+   "section": "beams",
+   "key": "beamDeform",
+   "description": "How much force (N) is required to deform the beam permanently. A value of 'FLT_MAX' will result in a beam that can't be permanently deformed.",
+   "type": "number",
+   "default": "220000",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamDeform"
+  },
+  {
+   "section": "beams",
+   "key": "beamPrecompression",
+   "description": "Precompression of the beam. The length it will become as soon as it spawns.",
+   "type": "number",
+   "default": "1.0",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamPrecompression"
+  },
+  {
+   "section": "beams",
+   "key": "precompressionRange",
+   "description": "Precompression length change in meters. Overrides beamPrecompression.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_precompressionRange"
+  },
+  {
+   "section": "beams",
+   "key": "beamPrecompressionTime",
+   "description": "Time in seconds for precompressed beams to reach their requested length.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_beamPrecompressionTime"
+  },
+  {
+   "section": "beams",
+   "key": "breakGroup",
+   "description": "The breakGroup of this beam. A beam gets automatically broken when another beam from the same breakGroup breaks.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_breakGroup"
+  },
+  {
+   "section": "beams",
+   "key": "breakGroupType",
+   "description": "Sets breakgroup behavior. If set to 0, this beam will break others in the breakGroup. If set to 1, this beam will NOT break others in the breakGroup, but will be broken by the group.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_breakGroupType"
+  },
+  {
+   "section": "beams",
+   "key": "disableMeshBreaking",
+   "description": "Disables mesh breaking. Useful when the breakable beam only acts as a structural support, for example in passenger cabins.",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_disableMeshBreaking"
+  },
+  {
+   "section": "beams",
+   "key": "disableTriangleBreaking",
+   "description": "Disables triangle breaking. Useful when the breakable beam only acts as a structural support, for example in passenger cabins.",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_disableTriangleBreaking"
+  },
+  {
+   "section": "beams",
+   "key": "name",
+   "description": "Name of the beam. Used by some systems to identify the specific beam to use.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_name"
+  },
+  {
+   "section": "beams",
+   "key": "dampCutoffHz",
+   "description": "Limits the vibration frequency above which damping applies. Only applies to normal, bounded, and l-beams.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_dampCutoffHz"
+  },
+  {
+   "section": "beams",
+   "key": "deformLimit",
+   "description": "Limits how much the beam can deform in compression.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_deformLimit"
+  },
+  {
+   "section": "beams",
+   "key": "deformLimitExpansion",
+   "description": "Limits how much the beam can deform in expansion. Used to avoid excessive stretching.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_deformLimitExpansion"
+  },
+  {
+   "section": "beams",
+   "key": "deformLimitStress",
+   "description": "Limits the beamDeform gain to this value (N). Useful to simulate friction on certain kinds of suspension.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_deformLimitStress"
+  },
+  {
+   "section": "beams",
+   "key": "optional",
+   "description": "Deactivates errors when one of the beam's node is missing. Used for cases where one of the nodes that make up the beam is located in an optional component.",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_optional"
+  },
+  {
+   "section": "beams",
+   "key": "deformGroup",
+   "description": "Identifies which deform group this beam is part of. Used to trigger flexbody deform groups and for damage simulation on some powertrain components.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_deformGroup"
+  },
+  {
+   "section": "beams",
+   "key": "deformationTriggerRatio",
+   "description": "Level of deformation above which the deformGroup is triggered. Typical values are very small numbers under 0.1.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_deformationTriggerRatio"
+  },
+  {
+   "section": "beams",
+   "key": "soundFile",
+   "description": "The FMOD event to play on beam compression.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_soundFile"
+  },
+  {
+   "section": "beams",
+   "key": "colorFactor",
+   "description": "Reduces the overall FMOD event volume by up to 10dB.",
+   "type": "number",
+   "default": "0.5",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_colorFactor"
+  },
+  {
+   "section": "beams",
+   "key": "attackFactor",
+   "description": "Sets the envelope attack factor of the sound.",
+   "type": "number",
+   "default": "10",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_attackFactor"
+  },
+  {
+   "section": "beams",
+   "key": "volumeFactor",
+   "description": "Sets the relationship between the beam compression and sound volume.",
+   "type": "number",
+   "default": "1",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_volumeFactor"
+  },
+  {
+   "section": "beams",
+   "key": "decayFactor",
+   "description": "Sets the envelope decay/release factors of the sound.",
+   "type": "number",
+   "default": "10",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_decayFactor"
+  },
+  {
+   "section": "beams",
+   "key": "pitchFactor",
+   "description": "Impulse-based pitch bend factor.",
+   "type": "number",
+   "default": "0",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_pitchFactor"
+  },
+  {
+   "section": "beams",
+   "key": "maxStress",
+   "description": "The beam stress value treated as full compression by the sound system.",
+   "type": "number",
+   "default": "35000",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/beams/#args_maxStress"
+  },
+  {
+   "section": "flexbodies",
+   "key": "mesh",
+   "description": "Defines the name of the mesh. This is the same name as in blender.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_mesh"
+  },
+  {
+   "section": "flexbodies",
+   "key": "group",
+   "description": "Defines the id of the node group this mesh is linked to. A mesh can be linked to multiple node groups.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_group"
+  },
+  {
+   "section": "flexbodies",
+   "key": "pos",
+   "description": "Position offset of the flexbody.",
+   "type": "float3",
+   "default": "0,0,0",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_pos"
+  },
+  {
+   "section": "flexbodies",
+   "key": "rot",
+   "description": "Rotation offset of the flexbody. Uses the intrinsic Euler +Z +X +Y rotation system.",
+   "type": "float3",
+   "default": "0,0,0",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_rot"
+  },
+  {
+   "section": "flexbodies",
+   "key": "scale",
+   "description": "Scale offset of the flexbody.",
+   "type": "float3",
+   "default": "1,1,1",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_scale"
+  },
+  {
+   "section": "flexbodies",
+   "key": "deformGroup",
+   "description": "Defines the deform group that will be used for this mesh. This name should match the deform group defined in the beams section.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_deformGroup"
+  },
+  {
+   "section": "flexbodies",
+   "key": "deformMaterialBase",
+   "description": "The name of the initial material that will get changed. Any mesh that has a deform group applied should have only a single material to avoid issues.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_deformMaterialBase"
+  },
+  {
+   "section": "flexbodies",
+   "key": "deformMaterialDamaged",
+   "description": "The name of the material to use when the break group is triggered.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_deformMaterialDamaged"
+  },
+  {
+   "section": "flexbodies",
+   "key": "deformSound",
+   "description": "The sound clip that will be played when the deform group is triggered.",
+   "type": "string",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_deformSound"
+  },
+  {
+   "section": "flexbodies",
+   "key": "deformVolume",
+   "description": "The volume of the sound clip that is played when the deform group is triggered.",
+   "type": "number",
+   "default": "",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_deformVolume"
+  },
+  {
+   "section": "flexbodies",
+   "key": "disableMeshBreaking",
+   "description": "Disables mesh breaking. Mesh breaking allows polygons of a flexbody mesh to be dynamically removed when an underlying beam breaks.",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_disableMeshBreaking"
+  },
+  {
+   "section": "flexbodies",
+   "key": "ignoreNodeOffset",
+   "description": "Whether the position of the mesh should ignore the nodeOffset modifier.",
+   "type": "boolean",
+   "default": "false",
+   "url": "https://documentation.beamng.com/modding/vehicle/sections/flexbodies/#args_ignoreNodeOffset"
+  }
+ ]
+}

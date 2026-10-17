@@ -1,0 +1,29 @@
+schema_version = "1.0.0"
+
+id = "jbeam_studio"
+version = "0.12.0"
+name = "JBeam Studio"
+tagline = "Edit BeamNG.drive JBeam vehicles and parts"
+maintainer = "Nikita (vohhu)"
+type = "add-on"
+website = "https://github.com/vohhu/jbeam-studio"
+tags = ["Import-Export", "Mesh"]
+
+blender_version_min = "4.5.0"
+
+license = ["SPDX:MIT"]
+copyright = [
+  "2023 BeamNG GmbH, Angelo Matteo",
+  "2023 BeamNG GmbH - Thomas Fischer",
+  "2026 Nikita (vohhu)",
+]
+
+[permissions]
+files = "Read and write JBeam and part config files"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "*.pyc",
+  "/.*",
+]
