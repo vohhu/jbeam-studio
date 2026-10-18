@@ -7,7 +7,8 @@
 
 <p align="center">
   <img alt="Blender 4.5 LTS and 5.2 LTS" src="https://img.shields.io/badge/Blender-4.5%20LTS%20%7C%205.2%20LTS-E87D0D?logo=blender&logoColor=white">
-  <img alt="Version 0.17.1" src="https://img.shields.io/badge/version-0.17.1-2ea44f">
+  <a href="https://github.com/vohhu/jbeam-studio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/vohhu/jbeam-studio?color=2ea44f"></a>
+  <a href="https://github.com/vohhu/jbeam-studio/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/vohhu/jbeam-studio/total?color=2ea44f"></a>
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue">
   <a href="https://github.com/vohhu/jbeam-studio/actions/workflows/core-tests.yml"><img alt="Tests" src="https://github.com/vohhu/jbeam-studio/actions/workflows/core-tests.yml/badge.svg"></a>
 </p>

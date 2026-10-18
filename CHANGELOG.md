@@ -2,7 +2,11 @@
 
 **English** · [Русский](CHANGELOG.ru.md)
 
-Versions 0.1–0.12 were released in the archived repository `vohhu/jbeam-studio-old`.
+Versions 0.1–0.12 were released before this repository was created.
+
+## 0.18.0
+
+- The first full release, no longer a preview, with the repository public.
 
 ## 0.17.1
 
