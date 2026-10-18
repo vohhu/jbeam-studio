@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
+import bmesh
 import bpy
 
 from ..core.assembly import BeamEntry, FaceEntry, NodeEntry
@@ -22,16 +23,47 @@ TEXT_SESSION = "jbs_session"
 TEXT_SHOWN = "jbs_shown"
 
 
-class ObjectSession:
-    """The edit session of one JBeam object, kept in memory while Blender runs."""
+class Group:
+    """The edit session of one imported vehicle or part, kept in memory while Blender runs, and the objects that
+    show its parts."""
 
-    def __init__(self, key: str, edit: EditSession, kind: str, path: Path, part_name: str):
+    def __init__(self, key: str, edit: EditSession, kind: str, path: Path):
         self.key = key
         self.edit = edit
         self.link = MeshLink(edit)
         self.kind = kind
         self.path = Path(path)
-        self.part_name = part_name
+        self.views: dict[str, ObjectSession] = {}
+        """The object of each part, by part name; "" for an object of the whole vehicle from an older version."""
+        self.changed_on_disk: list[Path] = []
+        self.save_error: str | None = None
+        """Why the last automatic save failed."""
+        self.saved_at: float | None = None
+        """When files were last written, by a save or an automatic save."""
+        self.saved_files: list[str] = []
+
+
+def _shared(name: str):
+    return property(lambda self: getattr(self.group, name), lambda self, value: setattr(self.group, name, value))
+
+
+class ObjectSession:
+    """One JBeam object: the part of its group's vehicle that it shows, and the state of its mesh."""
+
+    key = _shared("key")
+    edit = _shared("edit")
+    link = _shared("link")
+    kind = _shared("kind")
+    path = _shared("path")
+    changed_on_disk = _shared("changed_on_disk")
+    save_error = _shared("save_error")
+    saved_at = _shared("saved_at")
+    saved_files = _shared("saved_files")
+
+    def __init__(self, group: Group, scope: str | None):
+        self.group = group
+        self.scope = scope
+        """The part the object shows and edits; None for the whole vehicle."""
         self.object_name = ""
         self.mode = "OBJECT"
         self.error: str | None = None
@@ -41,19 +73,23 @@ class ObjectSession:
         self.last_plan: SyncPlan | None = None
         self.built: tuple | None = None
         """Fingerprint of the mesh as last built or applied."""
-        self.changed_on_disk: list[Path] = []
-        self.save_error: str | None = None
-        """Why the last automatic save failed."""
-        self.saved_at: float | None = None
-        """When files were last written, by a save or an automatic save."""
-        self.saved_files: list[str] = []
         self.new_ids: dict[int, str] = {}
         """Ids given to new nodes by the last `mirror`, by vertex index."""
         self.mirrored: tuple | None = None
         """Fingerprint of the mesh the session was last brought in line with."""
+        self.shown: int | None = None
+        """What the mesh showed when it was last built, to tell whether building it again would change it."""
+
+    @property
+    def part_name(self) -> str:
+        return self.scope or ""
 
 
-SESSIONS: dict[str, ObjectSession] = {}
+SESSIONS: dict[str, Group] = {}
+ROOT_COLLECTION = "JBeam"
+COLLECTION_ROOT = "jbs_root"
+COLLECTION_PATH = "jbs_path"
+COLLECTION_GROUP = "jbs_group"
 
 
 # opening
@@ -74,49 +110,114 @@ def parts_of_file(path: Path) -> list[str]:
     return list(parts)
 
 
-def object_name_for(kind: str, path: Path, part_name: str) -> str:
-    path = Path(path)
+def has_geometry(edit: EditSession, part: str) -> bool:
+    """Whether a part has nodes, or rows of beams, faces, hydros or rails, to show as an object."""
+    vehicle = edit.vehicle
+    return any(e.part == part for e in (*vehicle.nodes.values(), *vehicle.beams, *vehicle.triangles,
+                                        *vehicle.quads, *vehicle.extras))
+
+
+def root_collection(context):
+    """The JBeam collection of the scene, which holds a collection for each file."""
+    root = next((c for c in bpy.data.collections if c.get(COLLECTION_ROOT)), None)
+    if root is None:
+        root = bpy.data.collections.new(ROOT_COLLECTION)
+        root[COLLECTION_ROOT] = True
+    scene = context.scene.collection
+    if root.name not in scene.children and root not in scene.children_recursive:
+        scene.children.link(root)
+    return root
+
+
+def file_collection(context, path: Path, group_key: str = ""):
+    """The collection of a .jbeam file under the JBeam collection: one for the parts a vehicle uses from the file,
+    or one shared by parts imported on their own (`group_key` empty)."""
+    root = root_collection(context)
+    for child in root.children:
+        if child.get(COLLECTION_PATH) == str(path) and child.get(COLLECTION_GROUP, "") == group_key:
+            return child
+    collection = bpy.data.collections.new(Path(path).name)
+    collection[COLLECTION_PATH] = str(path)
+    collection[COLLECTION_GROUP] = group_key
+    root.children.link(collection)
+    return collection
+
+
+def create_objects(context, kind: str, path: Path, part_names=(), roots=()) -> list[bpy.types.Object]:
+    """Opens a vehicle, or parts of a .jbeam file, and adds an object for each part to the collection of its
+    file under the JBeam collection. A vehicle gets one object for each of its parts that has something to show."""
+    path = Path(path).absolute()
+    objects = []
     if kind == "PC":
-        return f"{path.parent.name} ({path.stem})"
-    return part_name
+        edit = open_edit_session(kind, path, "", roots)
+        group = _new_group(edit, kind, path)
+        for part, definition in edit.vehicle.parts.items():
+            if has_geometry(edit, part):
+                file = Path(definition.file.path).absolute()
+                objects.append(_new_object(context, group, part, file_collection(context, file, group.key), roots))
+        if not objects:
+            SESSIONS.pop(group.key, None)
+            raise EditError(f"{path.name} has no parts with nodes, beams or faces")
+        return objects
+    for part in part_names:
+        group = _new_group(open_edit_session(kind, path, part, roots), kind, path)
+        objects.append(_new_object(context, group, part, file_collection(context, path), roots))
+    return objects
 
 
-def create_object(context, kind: str, path: Path, part_name: str = "", roots=()) -> bpy.types.Object:
-    """Opens a vehicle or part and adds an object showing it to the active collection."""
-    edit = open_edit_session(kind, path, part_name, roots)
-    name = object_name_for(kind, path, part_name)
-    obj = bpy.data.objects.new(name, bpy.data.meshes.new(name))
-    context.collection.objects.link(obj)
+def _new_group(edit: EditSession, kind: str, path: Path, key: str | None = None) -> Group:
+    group = Group(key or uuid.uuid4().hex, edit, kind, path)
+    SESSIONS[group.key] = group
+    return group
+
+
+def _new_object(context, group: Group, part: str, collection, roots) -> bpy.types.Object:
+    obj = bpy.data.objects.new(part, bpy.data.meshes.new(part))
+    collection.objects.link(obj)
     settings = obj.jbs
-    settings.kind = kind
-    settings.path = str(Path(path).absolute())
-    settings.part_name = part_name
+    settings.kind = group.kind
+    settings.path = str(group.path)
+    settings.part_name = part
     settings.vehicle_roots = ";".join(str(r) for r in roots)
-    session = attach(obj, edit)
-    settings.active_part = part_name if kind == "PART" else (edit.vehicle.main_part or next(iter(session.link.part_names), ""))
+    settings.session_key = group.key
+    settings.active_part = part
+    attach(obj, group, part)
     return obj
 
 
-def attach(obj, edit: EditSession) -> ObjectSession:
-    settings = obj.jbs
-    key = uuid.uuid4().hex
-    session = ObjectSession(key, edit, settings.kind, Path(settings.path), settings.part_name)
-    SESSIONS[key] = session
-    settings.session_key = key
+def attach(obj, group: Group, scope: str | None) -> ObjectSession:
+    session = ObjectSession(group, scope)
+    group.views[session.part_name] = session
     session.object_name = obj.name
     session.mode = obj.mode
     if obj.mode == "EDIT":
         session.stale = True
     else:
-        rebuild(obj, session)
+        rebuild(obj, session, others=False)
     return session
 
 
 def load_object(obj) -> ObjectSession:
-    """Opens the files of an object saved in a .blend file and rebuilds its mesh from them (in Object Mode)."""
+    """Opens the files of an object saved in a .blend file and rebuilds its mesh from them (in Object Mode). Objects
+    that showed parts of one vehicle share its session again."""
     settings = obj.jbs
-    edit = open_edit_session(settings.kind, Path(settings.path), settings.part_name, parse_roots(settings.vehicle_roots))
-    return attach(obj, edit)
+    group = SESSIONS.get(settings.session_key) if settings.session_key else None
+    if group is None or group.kind != settings.kind or group.path != Path(settings.path):
+        part = settings.part_name if settings.kind == "PART" else ""
+        edit = open_edit_session(settings.kind, Path(settings.path), part, parse_roots(settings.vehicle_roots))
+        group = _new_group(edit, settings.kind, Path(settings.path), settings.session_key or None)
+        settings.session_key = group.key
+    return attach(obj, group, settings.part_name or None)
+
+
+def detach(obj) -> None:
+    session = session_of(obj)
+    if session is not None:
+        session.group.views.pop(session.part_name, None)
+        if not session.group.views:
+            SESSIONS.pop(session.key, None)
+    obj.jbs.kind = "NONE"
+    obj.jbs.session_key = ""
 
 
 # finding
@@ -125,15 +226,20 @@ def session_of(obj) -> ObjectSession | None:
     """The session of a JBeam object; None for other objects and for copies of a JBeam object."""
     if obj is None or obj.type != "MESH":
         return None
-    session = SESSIONS.get(obj.jbs.session_key)
+    group = SESSIONS.get(obj.jbs.session_key)
+    session = group.views.get(obj.jbs.part_name) if group is not None else None
     if session is None:
         return None
     if session.object_name != obj.name:
         owner = bpy.data.objects.get(session.object_name)
-        if owner is not None and owner != obj and owner.jbs.session_key == session.key:
+        if owner is not None and owner != obj and _shows(owner, session):
             return None
         session.object_name = obj.name
     return session
+
+
+def _shows(obj, session: ObjectSession) -> bool:
+    return obj.type == "MESH" and obj.jbs.session_key == session.key and obj.jbs.part_name == session.part_name
 
 
 def is_copy(obj) -> bool:
@@ -142,21 +248,32 @@ def is_copy(obj) -> bool:
 
 def object_of(session: ObjectSession):
     obj = bpy.data.objects.get(session.object_name)
-    if obj is not None and obj.jbs.session_key == session.key:
+    if obj is not None and _shows(obj, session):
         return obj
     for obj in bpy.data.objects:
-        if obj.type == "MESH" and obj.jbs.session_key == session.key:
+        if _shows(obj, session):
             session.object_name = obj.name
             return obj
     return None
 
 
+def views_of(session: ObjectSession) -> list[tuple[bpy.types.Object, ObjectSession]]:
+    """The objects of every part of the session's vehicle, the session's own first."""
+    found = []
+    for view in [session, *(v for v in session.group.views.values() if v is not session)]:
+        obj = object_of(view)
+        if obj is not None:
+            found.append((obj, view))
+    return found
+
+
 def jbeam_objects() -> list[tuple[bpy.types.Object, ObjectSession]]:
     found = []
-    for session in list(SESSIONS.values()):
-        obj = object_of(session)
-        if obj is not None:
-            found.append((obj, session))
+    for group in list(SESSIONS.values()):
+        for session in list(group.views.values()):
+            obj = object_of(session)
+            if obj is not None:
+                found.append((obj, session))
     return found
 
 
@@ -267,19 +384,55 @@ def node_entry(session: ObjectSession, node_id: str) -> NodeEntry | None:
     return vehicle.nodes.get(node_id) or vehicle.external_nodes.get(node_id)
 
 
-def rebuild(obj, session: ObjectSession, selected: set[str] | None = None) -> None:
-    """Builds the mesh from the session's current state, keeping the selection of nodes. Needs Object Mode."""
-    if selected is None and len(obj.data.vertices):
-        selected = set(selected_node_ids(obj, session))
-    data = session.link.build()
-    mesh_io.write_mesh(obj.data, data, session.link.rev)
-    if selected:
-        ids = session.link.map.ids
-        mesh_io.select_vertices(obj.data, [i for i, uid in enumerate(data.node_uids) if ids.get(uid) in selected])
+def rebuild(obj, session: ObjectSession, selected: set[str] | None = None, others: bool = True, data=None) -> None:
+    """Builds the mesh from the session's current state, keeping the selection of nodes; with `others`, the
+    meshes of the other parts of the vehicle that show another state are built again too."""
+    if selected is None:
+        selected = set(selected_node_ids(obj, session)) if _vertex_count(obj) else set()
+    if data is None:
+        data = session.link.build(session.scope, obj.jbs.all_nodes)
+    session.shown = _shape(data)
+    rev = session.link.rev
+    nodes = session.link.map.nodes
+    if obj.mode == "EDIT":
+        mesh_io.write_edit_mesh(obj, data, rev, {nodes[i] for i in selected if i in nodes})
+        session.mirrored = mesh_io.fingerprint(obj)
+    else:
+        mesh_io.write_mesh(obj.data, data, rev)
+        if selected:
+            ids = session.link.map.ids
+            mesh_io.select_vertices(obj.data, [i for i, uid in enumerate(data.node_uids) if ids.get(uid) in selected])
     session.built = mesh_io.fingerprint(obj)
     session.error = None
     session.stale = False
+    if others:
+        sync_others(session)
     refresh_texts(session)
+
+
+def _vertex_count(obj) -> int:
+    return len(bmesh.from_edit_mesh(obj.data).verts) if obj.mode == "EDIT" else len(obj.data.vertices)
+
+
+def sync_others(session: ObjectSession) -> None:
+    """Brings the meshes of the other parts of the session's vehicle to its current state: a mesh whose part looks
+    the same is only marked with the state, the others are built again."""
+    rev = session.link.rev
+    for obj, view in views_of(session)[1:]:
+        if mesh_io.mesh_rev(obj) == rev and not view.stale:
+            continue
+        data = view.link.build(view.scope, obj.jbs.all_nodes)
+        if (obj.mode != "EDIT" and not view.stale and view.shown == _shape(data)
+                and view.built == mesh_io.fingerprint(obj)):
+            mesh_io.set_rev(obj, rev)
+            view.built = mesh_io.fingerprint(obj)
+            continue
+        rebuild(obj, view, others=False, data=data)
+
+
+def _shape(data) -> int:
+    return hash((tuple(data.positions), tuple(data.node_uids), tuple(data.edges), tuple(data.edge_uids),
+                 tuple(data.faces), tuple(data.face_uids), tuple(data.ghosts)))
 
 
 STALE = ("The mesh was built from a state of the files that the edit history no longer has. "
@@ -296,6 +449,7 @@ def catch_up(obj, session: ObjectSession) -> bool:
         refresh_texts(session)
         autosave(obj, session)
     session.stale = False
+    sync_others(session)
     return True
 
 
@@ -345,21 +499,22 @@ def in_sync(obj, session: ObjectSession) -> bool:
     return obj.mode != "EDIT" and session.built == mesh_io.fingerprint(obj) and mesh_io.mesh_rev(obj) == session.link.rev
 
 
-def mirror(obj, session: ObjectSession) -> bool:
+def mirror(obj, session: ObjectSession, follow: bool = True) -> bool:
     """Brings the session to what the mesh shows: the state the mesh was built from, plus the mesh's edits.
 
     Leaves the mesh as it is and works in both modes, so it can run after every operation and after Blender's
     undo and redo. Returns whether the session changed. Raises EditError when the edits cannot be applied; the
-    session then shows the state the mesh was built from.
+    session then shows the state the mesh was built from. Without `follow` the session stays in its state, for
+    a mesh of another part applied right after one that moved it there.
     """
     before = session.link.rev
     rev = mesh_io.mesh_rev(obj)
-    if rev is not None and rev != before and not session.link.goto(rev):
+    if follow and rev is not None and rev != before and not session.link.goto(rev):
         session.stale = True
         raise EditError(STALE)
     session.stale = False
     data = mesh_io.read_mesh(obj)
-    plan = session.link.plan(data)
+    plan = session.link.plan(data, session.scope)
     session.last_plan = plan
     session.new_ids = {}
     try:
@@ -390,6 +545,7 @@ def apply_mesh(obj, session: ObjectSession) -> bool:
     plan = session.last_plan
     if plan.empty and not plan.needs_rebuild:
         session.built = mesh_io.fingerprint(obj)
+        sync_others(session)
         autosave(obj, session)
         return False
     selected = {plan.vertex_nodes[v] for v in selected_vertices if v in plan.vertex_nodes}
@@ -406,23 +562,30 @@ def apply_live(obj, session: ObjectSession) -> bool:
         changed = commit_edit_mesh(obj, session)
     else:
         changed = mirror(obj, session)
+        sync_others(session)
     autosave(obj, session)
     return changed
 
 
 def commit_edit_mesh(obj, session: ObjectSession) -> bool:
-    """In Edit Mode: applies the mesh edits and writes the resulting uids and positions into the edit mesh,
-    so the mesh matches the session exactly. Returns whether the session changed.
+    """In Edit Mode: applies the mesh edits of every part of the vehicle in Edit Mode and writes the resulting
+    uids and positions into their edit meshes, so they match the session exactly; the meshes of the other parts
+    are built again. Returns whether the session changed.
 
     The edit mesh then differs from Blender's last undo step, which holds the mesh as the user left it; undoing
     to that step or redoing it applies the same edits again and reaches the same state, so this is safe.
     """
-    changed = mirror(obj, session)
-    plan = session.last_plan
-    if plan.empty and mesh_io.mesh_rev(obj) == session.link.rev:
-        return changed
-    mesh_io.stamp(obj, session.link, plan, session.new_ids)
-    session.mirrored = mesh_io.fingerprint(obj)
+    editing = [(o, v) for o, v in views_of(session) if o.mode == "EDIT"] or [(obj, session)]
+    changed = False
+    for index, (edited, view) in enumerate(editing):
+        changed |= mirror(edited, view, follow=index == 0)
+    rev = session.link.rev
+    for edited, view in editing:
+        if view.last_plan.empty and mesh_io.mesh_rev(edited) == rev:
+            continue
+        mesh_io.stamp(edited, session.link, view.last_plan, view.new_ids)
+        view.mirrored = mesh_io.fingerprint(edited)
+    sync_others(session)
     return changed
 
 
@@ -435,6 +598,7 @@ def after_change(obj, session: ObjectSession, renames=None, rebuild_mesh: bool =
         mesh_io.set_rev(obj, session.link.rev)
         if obj.mode != "EDIT":
             session.built = mesh_io.fingerprint(obj)
+        sync_others(session)
         refresh_texts(session)
     autosave(obj, session)
 

@@ -31,6 +31,8 @@ def clean_scene():
         bpy.data.meshes.remove(mesh)
     for text in list(bpy.data.texts):
         bpy.data.texts.remove(text)
+    for collection in list(bpy.data.collections):
+        bpy.data.collections.remove(collection)
     sessions.SESSIONS.clear()
 
 

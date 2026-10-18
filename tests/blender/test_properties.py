@@ -48,7 +48,7 @@ def test_select_by_property(car):
     obj, session = import_pc(car)
     edit_mesh(obj)
     assert bpy.ops.jbs.select_by_property(kind="nodes", key="nodeWeight", value="10") == {"FINISHED"}
-    assert selected(obj, session) == ["b1l", "b1r", "b2", "d1l", "e1"]
+    assert selected(obj, session) == ["b1l", "b1r", "b2"]
     assert bpy.ops.jbs.select_by_property(kind="nodes", key="name", value='"b2"') == {"FINISHED"}
     assert selected(obj, session) == ["b2"]
 

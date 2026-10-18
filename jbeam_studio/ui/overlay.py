@@ -279,8 +279,6 @@ def draw_ghosts() -> None:
     gpu.state.point_size_set(9.0)
     gpu.state.blend_set("ALPHA")
     for obj, session in _shown_objects(context):
-        if not session.edit.vehicle.external_nodes:
-            continue
         data = _vertices(obj)
         if data is None:
             continue

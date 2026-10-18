@@ -66,6 +66,7 @@ def _read_edit_mesh(obj) -> MeshData:
     verts, edges, faces = bm.verts, bm.edges, bm.faces
     ints = verts.layers.int
     uid, check = ints.get(NODE_UID), ints.get(NODE_CHECK)
+    ghost = verts.layers.bool.get(GHOST) if hasattr(verts.layers, "bool") else None
     edge_uid, face_uid = edges.layers.int.get(BEAM_UID), faces.layers.int.get(FACE_UID)
     return MeshData(
         positions=[tuple(v.co) for v in verts],
@@ -75,6 +76,7 @@ def _read_edit_mesh(obj) -> MeshData:
         edge_uids=[e[edge_uid] for e in edges] if edge_uid is not None else [0] * len(edges),
         faces=[tuple(v.index for v in f.verts) for f in faces],
         face_uids=[f[face_uid] for f in faces] if face_uid is not None else [0] * len(faces),
+        ghosts=[bool(v[ghost]) for v in verts] if ghost is not None else [],
     )
 
 
@@ -96,6 +98,10 @@ def read_mesh(obj) -> MeshData:
     mesh.loops.foreach_get("vertex_index", corners)
     corner_list = corners.tolist()
     faces = [tuple(corner_list[s:s + t]) for s, t in zip(starts.tolist(), totals.tolist())]
+    ghosts = np.zeros(vertex_count, dtype=bool)
+    attribute = mesh.attributes.get(GHOST)
+    if attribute is not None and attribute.domain == "POINT" and vertex_count:
+        attribute.data.foreach_get("value", ghosts)
     return MeshData(
         positions=[tuple(p) for p in positions.reshape(-1, 3).astype(float).tolist()],
         node_uids=_read(mesh, NODE_UID, "POINT", vertex_count).tolist(),
@@ -104,6 +110,7 @@ def read_mesh(obj) -> MeshData:
         edge_uids=_read(mesh, BEAM_UID, "EDGE", edge_count).tolist(),
         faces=faces,
         face_uids=_read(mesh, FACE_UID, "FACE", face_count).tolist(),
+        ghosts=ghosts.tolist(),
     )
 
 
@@ -126,9 +133,44 @@ def fingerprint(obj) -> tuple:
             int(_read(mesh, BEAM_UID, "EDGE", len(mesh.edges)).sum(dtype=np.int64)))
 
 
+def write_edit_mesh(obj, data: MeshData, rev: int, selected: set[int] = frozenset()) -> None:
+    """Replaces the geometry of the edit mesh of `obj` with `data`, selecting the vertices of the node uids
+    `selected`; the edit mesh counterpart of `write_mesh`."""
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.clear()
+    ints = bm.verts.layers.int
+    uid_layer, check_layer = ints.get(NODE_UID) or ints.new(NODE_UID), ints.get(NODE_CHECK) or ints.new(NODE_CHECK)
+    part_layer, rev_layer = ints.get(PART) or ints.new(PART), ints.get(REV) or ints.new(REV)
+    ghost_layer = (bm.verts.layers.bool.get(GHOST) or bm.verts.layers.bool.new(GHOST)) \
+        if hasattr(bm.verts.layers, "bool") else None
+    edge_layer = bm.edges.layers.int.get(BEAM_UID) or bm.edges.layers.int.new(BEAM_UID)
+    face_layer = bm.faces.layers.int.get(FACE_UID) or bm.faces.layers.int.new(FACE_UID)
+    verts = []
+    for index, position in enumerate(data.positions):
+        vertex = bm.verts.new(position)
+        vertex[uid_layer], vertex[check_layer] = data.node_uids[index], data.node_checks[index]
+        vertex[part_layer] = data.parts[index] if data.parts else -1
+        vertex[rev_layer] = rev
+        if ghost_layer is not None:
+            vertex[ghost_layer] = bool(data.ghosts[index]) if data.ghosts else False
+        vertex.select = data.node_uids[index] in selected
+        verts.append(vertex)
+    for (a, b), uid in zip(data.edges, data.edge_uids):
+        bm.edges.new((verts[a], verts[b]))[edge_layer] = uid
+    for corners, uid in zip(data.faces, data.face_uids):
+        bm.faces.new([verts[i] for i in corners])[face_layer] = uid
+    for edge in bm.edges:
+        if edge[edge_layer] == 0:
+            edge[edge_layer] = FACE_EDGE
+    bm.select_flush(True)
+    bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=True)
+    obj.data[REV] = rev
+
+
 def stamp(obj, link, plan, new_ids) -> None:
     """Writes the uids, positions and state number of the session into the edit mesh it was just matched with
-    (by `MeshLink.plan` and `apply`), so the mesh shows the session exactly without being rebuilt."""
+    (by `MeshLink.plan` and `apply`), so the mesh shows the session exactly without being rebuilt. Nodes outside
+    the plan's part are ghosts."""
     bm = bmesh.from_edit_mesh(obj.data)
     ints = bm.verts.layers.int
     uid_layer, check_layer = ints.get(NODE_UID) or ints.new(NODE_UID), ints.get(NODE_CHECK) or ints.new(NODE_CHECK)
@@ -138,15 +180,14 @@ def stamp(obj, link, plan, new_ids) -> None:
     face_layer = bm.faces.layers.int.get(FACE_UID) or bm.faces.layers.int.new(FACE_UID)
     vehicle, uid_map, rev = link.session.vehicle, link.map, link.rev
     part_index = {name: i for i, name in enumerate(link.part_names)}
+    own = link.own_nodes(plan.scope)
     for index, vertex in enumerate(bm.verts):
         vertex[rev_layer] = rev
         node_id = plan.vertex_nodes.get(index) or new_ids.get(index)
-        node = vehicle.nodes.get(node_id) if node_id else None
-        ghost = node is None
-        if ghost:
-            node = vehicle.external_nodes.get(node_id) if node_id else None
+        node = (vehicle.nodes.get(node_id) or vehicle.external_nodes.get(node_id)) if node_id else None
         if node is None:
             continue
+        ghost = node_id not in own
         uid = uid_map.nodes[node_id]
         vertex[uid_layer] = uid
         vertex[check_layer] = uid_check(uid)

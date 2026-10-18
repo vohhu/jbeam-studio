@@ -73,7 +73,12 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
         column = box.column(align=True)
         column.label(text=Path(settings.path).name, icon="FILE_3D" if settings.kind == "PC" else "FILE")
         column.label(text=summary(session))
-        box.prop(settings, "active_part", icon="OBJECT_DATA")
+        if session.scope is None:
+            box.prop(settings, "active_part", icon="OBJECT_DATA")
+        else:
+            row = box.row(align=True)
+            row.label(text=tr("Part: {part}").format(part=session.scope), icon="OBJECT_DATA")
+            row.prop(settings, "all_nodes", text="", icon="OUTLINER_OB_POINTCLOUD", toggle=True)
 
         if session.stale:
             alert = layout.box()
@@ -238,7 +243,7 @@ class JBS_PT_selection(_SessionPanel, bpy.types.Panel):
             node = entries[0]
             box = layout.box()
             box.label(text=node.id, icon="DOT")
-            if node.id in session.edit.vehicle.external_nodes:
+            if node.id in session.edit.vehicle.external_nodes or session.scope not in (None, node.part):
                 box.label(text="Node of another part, shown for reference", icon="INFO")
             box.label(text=tr("Part: {part}").format(part=node.part or "?"))
             box.label(text="X {:.3f}   Y {:.3f}   Z {:.3f}".format(*node.pos))

@@ -45,7 +45,7 @@ def test_edit_mode_edits_reach_the_text_and_the_file_right_away(car):
     assert sessions.apply_live(obj, session)
     assert obj.mode == "EDIT" and mesh_io.mesh_rev(obj) == session.link.rev != base_rev
     assert MOVED_ROW in text.as_string() and MOVED_ROW in read_text(car / "body.jbeam")
-    assert session.link.plan(mesh_io.read_mesh(obj)).empty
+    assert session.link.plan(mesh_io.read_mesh(obj), session.scope).empty
 
 
 def restore(obj, session, x, rev):
@@ -87,7 +87,7 @@ def test_new_node_can_be_renamed_in_edit_mode(car):
     assert sessions.active_node_id(obj, session) == "b3"
     session.edit.rename_node("b3", "x1")
     sessions.after_change(obj, session, renames={"x1": "b3"})
-    assert session.link.plan(mesh_io.read_mesh(obj)).empty
+    assert session.link.plan(mesh_io.read_mesh(obj), session.scope).empty
     assert any({b.id1, b.id2} == {"b2", "x1"} for b in session.edit.vehicle.beams)
 
 
@@ -116,8 +116,15 @@ def test_leaving_edit_mode_after_live_edits_rebuilds_the_mesh(car):
     assert session.edit.vehicle.nodes["b2"].pos == pytest.approx((0.1, 1.0, 0.3))
 
 
+def door_of(car):
+    import_pc(car)
+    obj = bpy.data.objects["car_door_L_stock"]
+    bpy.context.view_layer.objects.active = obj
+    return obj, sessions.session_of(obj)
+
+
 def test_mirror_button_adds_the_counterpart_in_edit_mode(car):
-    obj, session = import_pc(car)
+    obj, session = door_of(car)
     bm = edit_mesh(obj)
     door = vertex(session, bm, "d1l")
     for element in bm.verts:
@@ -125,15 +132,16 @@ def test_mirror_button_adds_the_counterpart_in_edit_mode(car):
     bm.select_flush(False)
     bmesh.update_edit_mesh(obj.data)
     assert bpy.ops.jbs.mirror() == {"FINISHED"}
-    assert obj.mode == "EDIT" and "d1r" in session.edit.vehicle.nodes
+    assert obj.mode == "EDIT" and session.edit.vehicle.nodes["d1r"].part == "car_door_L_stock"
     assert sorted(sessions.selected_node_ids(obj, session)) == ["d1l", "d1r"]
-    assert session.link.plan(mesh_io.read_mesh(obj)).empty
-    assert len(obj.data.vertices) == len(session.edit.vehicle.nodes)
+    assert session.link.plan(mesh_io.read_mesh(obj), session.scope).empty
+    assert len(bmesh.from_edit_mesh(obj.data).verts) == len(session.link.build(session.scope).positions) == 4
 
 
 def test_mirror_button_across_y_through_the_active_node(car):
-    obj, session = import_pc(car)
+    obj, session = door_of(car)
     obj.jbs.mirror_axis, obj.jbs.mirror_plane = "y", "active"
+    obj.jbs.all_nodes = True
     bm = edit_mesh(obj)
     for element in bm.verts:
         element.select = False
@@ -197,7 +205,7 @@ def test_fix_buttons_delete_repeated_rows_and_keep_broken_ones_as_optional_in_ed
     assert '["b1r", "ghost", {"optional":true}]' in session.edit.text_of(path)
     assert not [d for d in session.edit.vehicle.diagnostics if d.fix]
     assert len(session.edit.history) == 3
-    assert session.link.plan(mesh_io.read_mesh(obj)).empty
+    assert session.link.plan(mesh_io.read_mesh(obj), session.scope).empty
 
 
 def test_live_applying_can_be_turned_off(car):

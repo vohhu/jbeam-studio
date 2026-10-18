@@ -37,16 +37,41 @@ def body(session, car):
     return to_python(parse(session.edit.text_of(car / "body.jbeam")))["car_body"]
 
 
-def test_import_builds_one_mesh_with_uids(car):
+def own_nodes(session, part="car_body"):
+    return [n for n in session.edit.vehicle.nodes.values() if n.part == part]
+
+
+def test_import_builds_an_object_for_each_part_in_a_collection_of_its_file(car):
     obj, session = import_pc(car)
-    vehicle = session.edit.vehicle
-    assert len(obj.data.vertices) == len(vehicle.nodes)
-    assert len(obj.data.polygons) == len(vehicle.triangles)
-    beam_uids = [a.value for a in obj.data.attributes[mesh_io.BEAM_UID].data]
-    assert sorted(u for u in beam_uids if u > 0) == sorted(session.link.map.beams)
-    assert mesh_io.mesh_rev(obj) == session.link.rev
-    assert obj.jbs.active_part == "car_body"
-    assert sessions.in_sync(obj, session)
+    root = next(c for c in bpy.data.collections if c.get(sessions.COLLECTION_ROOT))
+    assert root.name == "JBeam" and root.name in bpy.context.scene.collection.children
+    files = {c.name: sorted(o.jbs.part_name for o in c.objects) for c in root.children}
+    assert files == {"body.jbeam": ["car_body"], "doors.jbeam": ["car_door_L_stock"],
+                     "engine.jbeam": ["car_engine_small"]}
+    assert obj.name == "car_body" and obj.jbs.active_part == "car_body" and session.scope == "car_body"
+    assert len(obj.data.vertices) == len(own_nodes(session)) == 3
+    assert len(obj.data.polygons) == len(session.edit.vehicle.triangles)
+    door = bpy.data.objects["car_door_L_stock"]
+    door_session = sessions.session_of(door)
+    assert door_session.group is session.group and door_session.edit is session.edit
+    ghosts = [a.value for a in door.data.attributes[mesh_io.GHOST].data]
+    assert len(door.data.vertices) == 2 and ghosts.count(True) == 1
+    for part_obj, view in sessions.views_of(session):
+        assert mesh_io.mesh_rev(part_obj) == session.link.rev and sessions.in_sync(part_obj, view)
+    assert {o.name for o in bpy.context.selected_objects} == {"car_body", "car_door_L_stock", "car_engine_small"}
+
+
+def test_an_edit_in_one_part_builds_the_parts_that_show_its_nodes_again(car):
+    obj, session = import_pc(car)
+    door = bpy.data.objects["car_door_L_stock"]
+    bm = edit(obj)
+    vertex(obj, session, bm, "b1l").co = (0.7, 0.0, 0.3)
+    leave(obj)
+    sessions.apply_mesh(obj, session)
+    door_session = sessions.session_of(door)
+    assert mesh_io.mesh_rev(door) == session.link.rev and sessions.in_sync(door, door_session)
+    ghost = next(v.co for v, a in zip(door.data.vertices, door.data.attributes[mesh_io.GHOST].data) if a.value)
+    assert tuple(ghost) == pytest.approx((0.7, 0.0, 0.3))
 
 
 def test_moved_vertex_is_written_on_apply(car):
@@ -80,9 +105,9 @@ def test_extruded_vertex_becomes_a_node_with_a_beam(car):
     obj.jbs.node_prefix = "x"
     sessions.apply_mesh(obj, session)
     vehicle = session.edit.vehicle
-    assert vehicle.nodes["x1"].pos == pytest.approx((0.0, 2.0, 0.3))
+    assert vehicle.nodes["x1"].pos == pytest.approx((0.0, 2.0, 0.3)) and vehicle.nodes["x1"].part == "car_body"
     assert any({b.id1, b.id2} == {"b2", "x1"} for b in vehicle.beams)
-    assert len(obj.data.vertices) == len(vehicle.nodes)
+    assert len(obj.data.vertices) == len(own_nodes(session))
 
 
 def test_subdivided_edge_adds_a_node_between(car):
@@ -125,7 +150,7 @@ def test_flipped_face_flips_the_triangle(car):
 
 def test_failed_apply_keeps_the_mesh_edits(car):
     obj, session = import_pc(car)
-    obj.jbs.active_part = "no_such_part"
+    session.scope = "no_such_part"
     bm = edit(obj)
     bm.verts.new((0.0, 9.0, 9.0))
     leave(obj)
@@ -170,7 +195,7 @@ def test_rename_keeps_the_mesh_and_marks_the_new_state(car):
     sessions.after_change(obj, session, renames={"b9": "b2"})
     assert mesh_io.mesh_rev(obj) == session.link.rev
     bpy.ops.object.mode_set(mode="OBJECT")
-    assert session.link.plan(mesh_io.read_mesh(obj)).empty
+    assert session.link.plan(mesh_io.read_mesh(obj), session.scope).empty
 
 
 def test_save_writes_the_file_and_a_backup(car):
@@ -198,6 +223,8 @@ def test_part_import_shows_ghosts_and_ignores_their_moves(car):
     assert bpy.ops.jbs.import_jbeam(filepath=str(car / "doors.jbeam"), part_name="car_door_L_stock") == {"FINISHED"}
     obj = bpy.context.active_object
     session = sessions.session_of(obj)
+    assert [c.name for c in obj.users_collection] == ["doors.jbeam"]
+    assert obj.users_collection[0].name in bpy.data.collections["JBeam"].children
     ghosts = [a.value for a in obj.data.attributes[mesh_io.GHOST].data]
     assert ghosts.count(True) == 1
     bm = edit(obj)
@@ -238,4 +265,6 @@ def test_reopened_blend_file_loads_the_files_again(car, tmp_path):
     obj = bpy.data.objects[name]
     session = sessions.session_of(obj)
     assert session is not None and sessions.in_sync(obj, session)
-    assert len(obj.data.vertices) == len(session.edit.vehicle.nodes)
+    assert len(obj.data.vertices) == len(own_nodes(session))
+    door = sessions.session_of(bpy.data.objects["car_door_L_stock"])
+    assert door.group is session.group and len(sessions.SESSIONS) == 1

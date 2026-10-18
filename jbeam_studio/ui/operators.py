@@ -111,16 +111,22 @@ def _select_only(context, obj) -> None:
 def _finish_import(operator, context, kind: str, path: Path, part_name: str = ""):
     _start_in_object_mode(context)
     try:
-        obj = sessions.create_object(context, kind, path, part_name, preferences.vehicle_roots())
+        objects = sessions.create_objects(context, kind, path, [part_name] if part_name else [],
+                                          preferences.vehicle_roots())
     except (OSError, EditError) as error:
         operator.report({"ERROR"}, str(error))
         return {"CANCELLED"}
+    session = sessions.session_of(objects[0])
+    main = session.edit.vehicle.main_part
+    obj = next((o for o in objects if o.jbs.part_name == main), objects[0])
     _select_only(context, obj)
-    session = sessions.session_of(obj)
+    for other in objects:
+        other.select_set(True)
     diagnostics = session.edit.vehicle.diagnostics
+    name = f"{path.parent.name} ({path.stem})" if kind == "PC" else obj.name
     operator.report({"WARNING" if diagnostics.has_errors() else "INFO"},
                     tr("Loaded {name}: {summary}; {errors} errors, {warnings} warnings").format(
-                        name=obj.name, summary=summary(session), errors=len(diagnostics.errors()),
+                        name=name, summary=summary(session), errors=len(diagnostics.errors()),
                         warnings=len(diagnostics.warnings())))
     return {"FINISHED"}
 
@@ -128,7 +134,8 @@ def _finish_import(operator, context, kind: str, path: Path, part_name: str = ""
 class JBS_OT_import_pc(bpy.types.Operator, ImportHelper):
     bl_idname = "jbs.import_pc"
     bl_label = "Import JBeam Vehicle"
-    bl_description = "Assemble a vehicle from a part config (.pc) and show it as one mesh"
+    bl_description = ("Assemble a vehicle from a part config (.pc) and show each of its parts as an object, in a "
+                      "collection of its .jbeam file under the JBeam collection")
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ".pc"
@@ -355,11 +362,7 @@ class JBS_OT_detach(bpy.types.Operator):
         return obj is not None and obj.type == "MESH" and obj.jbs.kind != "NONE"
 
     def execute(self, context):
-        settings = context.active_object.jbs
-        if sessions.session_of(context.active_object) is not None:
-            sessions.SESSIONS.pop(settings.session_key, None)
-        settings.kind = "NONE"
-        settings.session_key = ""
+        sessions.detach(context.active_object)
         return {"FINISHED"}
 
 

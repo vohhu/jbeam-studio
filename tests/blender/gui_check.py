@@ -9,6 +9,7 @@ to <results.json> and quits.
 import json
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -79,8 +80,10 @@ def steps():
         for obj in list(bpy.data.objects):
             bpy.data.objects.remove(obj)
         bpy.ops.jbs.import_pc("EXEC_DEFAULT", True, filepath=str(car / "base.pc"))
-    obj = bpy.data.objects["car (base)"]
+    obj = bpy.data.objects["car_body"]
     session = sessions.session_of(obj)
+    root = bpy.data.collections["JBeam"]
+    results["steps"].append(("collections", {c.name: sorted(o.name for o in c.objects) for c in root.children}))
     results["steps"].append(("imported", len(obj.data.vertices)))
     yield 0.5
 
@@ -143,9 +146,13 @@ def steps():
     text_space = text_area.spaces.active
     text_space.show_line_numbers = True
     text_space.text = sessions.show_text(session, car / "body.jbeam")
-    obj = bpy.data.objects["car (base)"]
+    obj = bpy.data.objects["car_body"]
+    for part, _view in sessions.views_of(session):
+        part.select_set(True)
+    bpy.context.view_layer.objects.active = obj
     with bpy.context.temp_override(**override, active_object=obj, object=obj):
         bpy.ops.object.mode_set("EXEC_DEFAULT", True, mode="EDIT")
+    results["steps"].append(("parts in edit mode", sorted(o.name for o, _ in sessions.views_of(session) if o.mode == "EDIT")))
     bpy.context.scene.tool_settings.mesh_select_mode = (False, True, False)
     bm = bmesh.from_edit_mesh(obj.data)
     layer = bm.verts.layers.int["jbs_node_uid"]
@@ -166,16 +173,21 @@ def steps():
         with bpy.context.temp_override(**override):
             bpy.ops.screen.screenshot(filepath=str(shot))
     bpy.context.scene.tool_settings.mesh_select_mode = (True, False, False)
+    door_obj = bpy.data.objects["car_door_L_stock"]
+    door_bm = bmesh.from_edit_mesh(door_obj.data)
+    door_layer = door_bm.verts.layers.int["jbs_node_uid"]
     door = session.link.map.nodes["d1l"]
-    for collection in (bm.verts, bm.edges, bm.faces):
+    for collection in (door_bm.verts, door_bm.edges, door_bm.faces):
         for element in collection:
             element.select = False
-    for vertex in bm.verts:
-        vertex.select = vertex[layer] == door
-    bm.select_flush_mode()
-    bmesh.update_edit_mesh(obj.data)
+    for vertex in door_bm.verts:
+        vertex.select = vertex[door_layer] == door
+    door_bm.select_flush_mode()
+    bmesh.update_edit_mesh(door_obj.data)
+    bpy.context.view_layer.objects.active = door_obj
     yield 1.0
     results["steps"].append(("followed to", text_space.text.name, text_space.top))
+    bpy.context.view_layer.objects.active = obj
     body = sessions.show_text(session, car / "body.jbeam")
     text_space.text = body
     yield 0.5
@@ -289,10 +301,15 @@ def steps():
         with bpy.context.temp_override(**override):
             bpy.ops.jbs.import_pc("EXEC_DEFAULT", True, filepath=str(configs[0]))
         pickup = bpy.context.view_layer.objects.active
-        obj.hide_set(True)
+        for part, _view in sessions.views_of(session):
+            part.hide_set(True)
+        started = time.perf_counter()
         with bpy.context.temp_override(**override, active_object=pickup, object=pickup):
             bpy.ops.object.mode_set("EXEC_DEFAULT", True, mode="EDIT")
             bpy.ops.mesh.select_all(action="DESELECT")
+        pickup_views = sessions.views_of(sessions.session_of(pickup))
+        results["steps"].append(("pickup parts", len(pickup_views), sum(o.mode == "EDIT" for o, _ in pickup_views),
+                                 len(bpy.data.collections["JBeam"].children), round(time.perf_counter() - started, 2)))
         bm = bmesh.from_edit_mesh(pickup.data)
         bm.verts.ensure_lookup_table()
         bm.verts[0].select = True

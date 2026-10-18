@@ -57,10 +57,15 @@ def notify(title: str, message: str, icon: str = "ERROR") -> None:
         bpy.context.window_manager.popup_menu(draw, title=title, icon=icon)
 
 
-def apply_later(key: str) -> None:
+def find_view(key: str, part: str):
+    group = sessions.SESSIONS.get(key)
+    session = group.views.get(part) if group is not None else None
+    return (sessions.object_of(session), session) if session is not None else (None, None)
+
+
+def apply_later(key: str, part: str) -> None:
     def run():
-        session = sessions.SESSIONS.get(key)
-        obj = sessions.object_of(session) if session is not None else None
+        obj, session = find_view(key, part)
         if obj is None or obj.mode == "EDIT":
             return None
         try:
@@ -92,7 +97,8 @@ def _operator_running() -> bool:
 
 
 def apply_live_later(key: str) -> None:
-    """Applies the edits of an edit mesh once it stopped changing and no tool is still running."""
+    """Applies the edits of the edit meshes of a vehicle's parts once they stopped changing and no tool is still
+    running."""
     token = _live_tokens[key] = _live_tokens.get(key, 0) + 1
     waited = 0.0
 
@@ -100,14 +106,19 @@ def apply_live_later(key: str) -> None:
         nonlocal waited
         if _live_tokens.get(key) != token or _restoring:
             return None
-        session = sessions.SESSIONS.get(key)
-        obj = sessions.object_of(session) if session is not None else None
-        if obj is None or obj.mode != "EDIT" or not obj.jbs.live_apply or session.stale:
+        group = sessions.SESSIONS.get(key)
+        editing = [(o, s) for o, s in sessions.jbeam_objects() if s.group is group and o.mode == "EDIT"]
+        active = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
+        editing.sort(key=lambda item: item[0] != active)
+        if not editing:
+            return None
+        obj, session = editing[0]
+        if not obj.jbs.live_apply or session.stale:
             return None
         if _operator_running() and waited < MODAL_WAIT:
             waited += LIVE_DELAY
             return LIVE_DELAY
-        if mesh_io.fingerprint(obj) == session.mirrored:
+        if all(mesh_io.fingerprint(o) == s.mirrored for o, s in editing):
             return None
         try:
             sessions.apply_live(obj, session)
@@ -139,7 +150,7 @@ def on_depsgraph_update(_scene, depsgraph) -> None:
     for obj, session in sessions.jbeam_objects():
         mode = obj.mode
         if session.mode == "EDIT" and mode != "EDIT" and obj.jbs.apply_on_exit:
-            apply_later(session.key)
+            apply_later(session.key, session.part_name)
         elif mode == "EDIT" and obj.jbs.live_apply and _geometry_changed(depsgraph, obj):
             apply_live_later(session.key)
         session.mode = mode
@@ -153,10 +164,18 @@ def on_undo_pre(*_args) -> None:
 
 @persistent
 def on_undo_post(*_args) -> None:
-    """Brings each session to the mesh Blender restored: with live applying, to the mesh with its edits."""
+    """Brings each session to the mesh Blender restored: with live applying, to the mesh with its edits. Of the
+    parts of a vehicle, a part in Edit Mode, or else the active object, leads, and the others follow it."""
     global _restoring
     try:
-        for obj, session in sessions.jbeam_objects():
+        active = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
+        objects = sessions.jbeam_objects()
+        for group in list(sessions.SESSIONS.values()):
+            views = [(o, s) for o, s in objects if s.group is group]
+            views.sort(key=lambda item: (item[0].mode != "EDIT", item[0] != active))
+            if not views:
+                continue
+            obj, session = views[0]
             try:
                 if obj.jbs.live_apply:
                     sessions.apply_live(obj, session)
@@ -166,7 +185,8 @@ def on_undo_post(*_args) -> None:
                 pass
             except Exception:
                 traceback.print_exc()
-            session.mode = obj.mode
+            for view_obj, view in views:
+                view.mode = view_obj.mode
     finally:
         _restoring = False
 
@@ -181,7 +201,6 @@ def on_load_post(*_args) -> None:
     for obj in list(bpy.data.objects):
         if obj.type != "MESH" or obj.jbs.kind == "NONE" or not obj.jbs.path:
             continue
-        obj.jbs.session_key = ""
         try:
             sessions.load_object(obj)
         except Exception as error:
@@ -191,8 +210,11 @@ def on_load_post(*_args) -> None:
 def watch() -> float:
     try:
         changed = False
+        checked = set()
         for _obj, session in sessions.jbeam_objects():
-            changed |= sessions.check_disk(session)
+            if session.key not in checked:
+                checked.add(session.key)
+                changed |= sessions.check_disk(session)
         if changed:
             redraw()
     except Exception:

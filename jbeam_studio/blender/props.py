@@ -5,6 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 
+from ..core.edit import EditError
 from . import sessions
 
 
@@ -12,6 +13,19 @@ def auto_save_changed(_self, _context) -> None:
     if sessions.auto_save_enabled():
         for obj, session in sessions.jbeam_objects():
             sessions.autosave(obj, session)
+
+
+def _all_nodes_changed(self, _context) -> None:
+    obj = self.id_data
+    session = sessions.session_of(obj)
+    if session is None:
+        return
+    if obj.mode == "EDIT":
+        try:
+            sessions.commit_edit_mesh(obj, session)
+        except EditError:
+            return
+    sessions.rebuild(obj, session)
 
 
 def _search_groups(self, context, edit_text):
@@ -50,6 +64,11 @@ class JBS_ObjectSettings(bpy.types.PropertyGroup):
     part_name: StringProperty(name="Part")
     vehicle_roots: StringProperty(name="Other vehicles folders", description="Folders separated by ;")
     session_key: StringProperty()
+    all_nodes: BoolProperty(
+        name="All vehicle nodes", update=_all_nodes_changed,
+        description="Show every node of the vehicle in this part's mesh, the nodes of other parts in orange, so new "
+                    "beams and faces of this part can join any of them",
+    )
     active_part: StringProperty(
         name="Active part", search=_search_parts,
         description="Part that new nodes, beams, triangles and quads are added to when they do not come from a node "

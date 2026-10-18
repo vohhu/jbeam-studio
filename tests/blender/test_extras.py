@@ -50,9 +50,9 @@ def test_hydros_rails_and_slide_nodes_are_added_from_the_selection_in_edit_mode(
         bpy.ops.jbs.add_extra(section="hydros")
     assert bpy.ops.jbs.add_rail(name="track", looped=True) == {"FINISHED"}
     assert extras(session, "rails") == [(("b1l", "b2", "b1r"), "track")]
-    select_in_order(obj, session, ["d1l"])
+    select_in_order(obj, session, ["b2"])
     assert bpy.ops.jbs.add_slidenodes(rail="track") == {"FINISHED"}
-    assert extras(session, "slidenodes") == [(("d1l",), "track")]
+    assert extras(session, "slidenodes") == [(("b2",), "track")]
     text = session.edit.text_of(car / "body.jbeam")
     assert '"track": {"links:":["b1l", "b2", "b1r"], "broken:":[], "looped":true, "capped":true}' in text
     assert len(session.edit.history) == 3

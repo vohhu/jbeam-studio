@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import random
 import re
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -104,6 +104,8 @@ class SyncPlan:
     ghosts_deleted: int = 0
     ngons: int = 0
     """New faces with more than four corners, which JBeam has no section for."""
+    scope: str | None = None
+    """The part the mesh shows, whose rows alone the plan changes; None for the whole vehicle."""
 
     @property
     def empty(self) -> bool:
@@ -178,6 +180,7 @@ class MeshLink:
         self._base_rev = 0
         self._maps: OrderedDict[int, UidMap] = OrderedDict()
         self._vehicles: OrderedDict[int, object] = OrderedDict()
+        self._parts_cache: tuple | None = None
         self._current = self.rev
         self._maps[self._current] = self._derive(None, {})
         self._remember()
@@ -335,13 +338,64 @@ class MeshLink:
             return None
         return self.map.ids.get(uid)
 
-    def build(self) -> MeshData:
+    def _partition(self) -> tuple[dict, dict, dict]:
+        """The nodes, beam groups and face groups of each part, worked out once for each state."""
+        vehicle, uid_map = self.session.vehicle, self.map
+        cached = self._parts_cache
+        if cached is not None and cached[0] is vehicle and cached[1] is uid_map:
+            return cached[2]
+        nodes: dict[str, set[str]] = defaultdict(set)
+        beams: dict[str, list[Group]] = defaultdict(list)
+        faces: dict[str, list[Group]] = defaultdict(list)
+        for node_id, node in vehicle.nodes.items():
+            nodes[node.part].add(node_id)
+        for group in uid_map.beams.values():
+            for part in dict.fromkeys(vehicle.beams[i].part for i in group.indices):
+                beams[part].append(group)
+        all_faces = vehicle.triangles + vehicle.quads
+        for group in uid_map.faces.values():
+            for part in dict.fromkeys(all_faces[i].part for i in group.indices):
+                faces[part].append(group)
+        self._parts_cache = (vehicle, uid_map, (nodes, beams, faces))
+        return nodes, beams, faces
+
+    def own_nodes(self, scope: str | None) -> set[str]:
+        """Nodes a mesh of part `scope` edits: the nodes of that part, or of the whole vehicle for None."""
+        if scope is None:
+            return set(self.session.vehicle.nodes)
+        return self._partition()[0].get(scope, set())
+
+    def scoped(self, scope: str | None) -> tuple[list[Group], list[Group]]:
+        """The beam and face groups a mesh of part `scope` shows: those with a row in that part."""
+        if scope is None:
+            uid_map = self.map
+            return list(uid_map.beams.values()), list(uid_map.faces.values())
+        _, beams, faces = self._partition()
+        return beams.get(scope, []), faces.get(scope, [])
+
+    def ghost_nodes(self, scope: str | None) -> set[str]:
+        """Nodes of other parts that the beams and faces of part `scope` use."""
+        if scope is None:
+            return set(self.session.vehicle.external_nodes)
+        ids, own = self.map.ids, self.own_nodes(scope)
+        beams, faces = self.scoped(scope)
+        return {ids[uid] for group in beams + faces for uid in group.nodes} - own
+
+    def build(self, scope: str | None = None, all_nodes: bool = False) -> MeshData:
+        """The mesh of the whole vehicle, or of part `scope`: its nodes, beams and faces, with the nodes of other
+        parts they use as ghosts, or with every other node of the vehicle as a ghost if `all_nodes` is set."""
         vehicle, uid_map = self.session.vehicle, self.map
         part_index = {name: i for i, name in enumerate(self.part_names)}
+        own = self.own_nodes(scope)
+        ghosts = self.ghost_nodes(scope)
+        beams, faces = self.scoped(scope)
         data = MeshData()
         vertex: dict[int, int] = {}
-        for nodes, ghost in ((vehicle.nodes, False), (vehicle.external_nodes, True)):
+        for nodes in (vehicle.nodes, vehicle.external_nodes):
             for node_id, node in nodes.items():
+                ghost = node_id not in own
+                if ghost and not (all_nodes or node_id in ghosts):
+                    continue
                 uid = uid_map.nodes[node_id]
                 if uid in vertex:
                     continue
@@ -351,59 +405,72 @@ class MeshLink:
                 data.node_checks.append(uid_check(uid))
                 data.ghosts.append(ghost)
                 data.parts.append(-1 if ghost else part_index.get(node.part, -1))
-        for group in uid_map.beams.values():
+        for group in beams:
             data.edges.append((vertex[group.nodes[0]], vertex[group.nodes[1]]))
             data.edge_uids.append(group.uid)
-        for group in uid_map.faces.values():
+        for group in faces:
             data.faces.append(tuple(vertex[uid] for uid in group.nodes))
             data.face_uids.append(group.uid)
         return data
 
-    def plan(self, mesh: MeshData) -> SyncPlan:
+    def plan(self, mesh: MeshData, scope: str | None = None) -> SyncPlan:
         """Operations that make the session match `mesh`, a mesh built from the current state and then edited.
 
         Every vertex, edge and face that does not stand for an existing entry is new: a node, a beam, and a
-        triangle or quad. Edges marked `FACE_EDGE` are never beams.
+        triangle or quad. Edges marked `FACE_EDGE` are never beams. For a mesh of part `scope`, nodes of other
+        parts are ghosts, and only the nodes, beams and faces of that part can be deleted; a ghost vertex whose
+        node no longer exists is left out.
         """
         vehicle, uid_map = self.session.vehicle, self.map
-        plan = SyncPlan()
-        refs: list[str | int] = []
+        plan = SyncPlan(scope=scope)
+        own = self.own_nodes(scope)
+        refs: list[str | int | None] = []
         seen: set[int] = set()
+        flags = mesh.ghosts if len(mesh.ghosts) == len(mesh.positions) else [False] * len(mesh.positions)
         for index, (position, uid, check) in enumerate(zip(mesh.positions, mesh.node_uids, mesh.node_checks)):
             node_id = self.node_of(uid, check) if uid not in seen else None
             if node_id is None:
+                copied = self.node_of(uid, check)
+                if copied is None and flags[index]:
+                    refs.append(None)
+                    plan.ghosts_deleted += 1
+                    continue
                 refs.append(index)
                 plan.new_nodes[index] = tuple(float(c) for c in position)
-                copied = self.node_of(uid, check)
                 if copied is not None:
                     plan.new_sources[index] = copied
                 continue
             seen.add(uid)
             refs.append(node_id)
             plan.vertex_nodes[index] = node_id
-            node = vehicle.nodes.get(node_id)
-            if node is None:
-                if _moved(position, vehicle.external_nodes[node_id].pos):
+            if node_id not in own:
+                node = vehicle.nodes.get(node_id) or vehicle.external_nodes[node_id]
+                if _moved(position, node.pos):
                     plan.ghosts_moved += 1
-            elif _moved(position, node.pos):
+                continue
+            node = vehicle.nodes[node_id]
+            if _moved(position, node.pos):
                 plan.moves[node_id] = tuple(float(p) if abs(float(p) - c) > MOVE_EPSILON else c
                                             for p, c in zip(position, node.pos))
-        missing_ghosts = {uid_map.nodes[i] for i in vehicle.external_nodes} - seen
-        plan.ghosts_deleted = len(missing_ghosts)
-        plan.deleted_nodes = [node_id for node_id in vehicle.nodes if uid_map.nodes[node_id] not in seen]
-        keys = [uid_map.nodes[ref] if isinstance(ref, str) else -(ref + 1) for ref in refs]
+        missing_ghosts = {uid_map.nodes[i] for i in self.ghost_nodes(scope)} - seen
+        plan.ghosts_deleted += len(missing_ghosts)
+        plan.deleted_nodes = [node_id for node_id in vehicle.nodes
+                              if node_id in own and uid_map.nodes[node_id] not in seen]
+        keys = [uid_map.nodes[ref] if isinstance(ref, str) else -(ref + 1) if ref is not None else None
+                for ref in refs]
         for want_existing in (True, False):
             for a, b in mesh.edges:
                 for vertex, other in ((a, b), (b, a)):
                     if (vertex in plan.new_nodes and vertex not in plan.new_sources and vertex != other
-                            and isinstance(refs[other], str) == want_existing):
+                            and refs[other] is not None and isinstance(refs[other], str) == want_existing):
                         plan.new_sources[vertex] = refs[other]
 
+        scoped_beams, scoped_faces = self.scoped(scope)
         beam_keys = {frozenset(g.nodes): g.uid for g in uid_map.beams.values()}
         kept: set[int] = set()
         unmatched = []
         for (a, b), uid in zip(mesh.edges, mesh.edge_uids):
-            if uid == FACE_EDGE or a == b:
+            if uid == FACE_EDGE or a == b or keys[a] is None or keys[b] is None:
                 continue
             key = frozenset((keys[a], keys[b]))
             group = uid_map.beams.get(uid) if uid > 0 else None
@@ -420,14 +487,15 @@ class MeshLink:
                 if copied is not None:
                     plan.new_beam_sources[len(plan.new_beams)] = tuple(ids[u] for u in copied.nodes)
                 plan.new_beams.append((refs[a], refs[b]))
-        plan.deleted_beams = [uid for uid, g in uid_map.beams.items()
-                              if uid not in kept and not missing_ghosts & set(g.nodes)]
+        plan.deleted_beams = [g.uid for g in scoped_beams if g.uid not in kept and not missing_ghosts & set(g.nodes)]
 
         face_keys = {frozenset(g.nodes): g.uid for g in uid_map.faces.values()}
         kept = set()
         unmatched = []
         for verts, uid in zip(mesh.faces, mesh.face_uids):
             ordered = tuple(keys[v] for v in verts)
+            if None in ordered:
+                continue
             group = uid_map.faces.get(uid) if uid > 0 else None
             if (group is not None and uid not in kept and len(group.nodes) == len(ordered)
                     and frozenset(group.nodes) == frozenset(ordered)):
@@ -450,8 +518,7 @@ class MeshLink:
                 plan.new_faces.append(tuple(refs[v] for v in verts))
             else:
                 plan.ngons += 1
-        plan.deleted_faces = [uid for uid, g in uid_map.faces.items()
-                              if uid not in kept and not missing_ghosts & set(g.nodes)]
+        plan.deleted_faces = [g.uid for g in scoped_faces if g.uid not in kept and not missing_ghosts & set(g.nodes)]
         return plan
 
     def new_names(self, plan: SyncPlan, vertices: list[int], prefix: str = "n") -> list[str]:
@@ -509,19 +576,22 @@ class MeshLink:
                 grouped.setdefault(part, []).append(item)
             return grouped.items()
 
+        def own(entries):
+            return [e for e in entries if plan.scope is None or e.part == plan.scope]
+
         with session.transaction("Edit the mesh"):
             vehicle = session.vehicle
             faces = vehicle.triangles + vehicle.quads
             if plan.flipped_faces:
-                session.flip_faces([faces[i] for uid in plan.flipped_faces for i in uid_map.faces[uid].indices],
+                session.flip_faces(own([faces[i] for uid in plan.flipped_faces for i in uid_map.faces[uid].indices]),
                                    allow_shared)
                 count = len(faces)
                 vehicle = session.vehicle
                 faces = vehicle.triangles + vehicle.quads
                 if len(faces) != count:
                     raise EditError("the faces changed while flipping them")
-            entries = [vehicle.beams[i] for uid in plan.deleted_beams for i in uid_map.beams[uid].indices]
-            entries += [faces[i] for uid in plan.deleted_faces for i in uid_map.faces[uid].indices]
+            entries = own([vehicle.beams[i] for uid in plan.deleted_beams for i in uid_map.beams[uid].indices])
+            entries += own([faces[i] for uid in plan.deleted_faces for i in uid_map.faces[uid].indices])
             if entries:
                 session.delete_entries(entries, allow_shared)
             if plan.deleted_nodes:
@@ -626,6 +696,9 @@ class MeshLink:
         node, or to the part all its nodes share. Everything else goes to the active part.
         """
         vehicle = self.session.vehicle
+        if plan.scope is not None:
+            scope = plan.scope if plan.scope in vehicle.parts else None
+            return {vertex: scope for vertex in plan.new_nodes}, lambda refs: scope
         if active not in vehicle.parts:
             active = None
 

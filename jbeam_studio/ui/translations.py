@@ -44,8 +44,15 @@ RUSSIAN = {
         "продолжить; неприменённые правки меша пропадут.",
     # operators
     "Import JBeam Vehicle": "Импорт JBeam-машины",
-    "Assemble a vehicle from a part config (.pc) and show it as one mesh":
-        "Собрать машину по конфигурации (.pc) и показать её одним мешем",
+    "All vehicle nodes": "Все ноды машины",
+    "Show every node of the vehicle in this part's mesh, the nodes of other parts in orange, so new beams and faces "
+    "of this part can join any of them":
+        "Показать в меше этой части все ноды машины, ноды других частей — оранжевыми, чтобы новые балки и грани "
+        "части могли идти к любой из них",
+    "Assemble a vehicle from a part config (.pc) and show each of its parts as an object, in a collection of its "
+    ".jbeam file under the JBeam collection":
+        "Собрать машину по конфигу (.pc) и показать каждую её часть отдельным объектом в коллекции её файла .jbeam "
+        "внутри коллекции JBeam",
     "Import JBeam Part": "Импорт JBeam-части",
     "Show one part of a .jbeam file as a mesh": "Показать одну часть файла .jbeam как меш",
     "Show one part of a .jbeam file as a mesh, with the nodes of other parts it uses":
