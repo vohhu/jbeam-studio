@@ -1,5 +1,10 @@
-"""Drawing in the 3D viewport: coloured beams and nodes, hydros and rails, nodes of other parts, node names, the
-centre of mass and a legend. Faces hide what is behind them, except in X-ray, in wireframe and with Through faces."""
+"""Drawing in the 3D viewport: coloured beams and nodes, hydros and rails, nodes of other parts, problems, the
+selection, node names, centres of mass and a legend. Faces hide what is behind them, except in X-ray, in wireframe
+and with Through faces.
+
+What is drawn over objects in Object Mode is worked out once and kept on the GPU, merged by colour, until the
+objects, their sessions or the settings change, so moving the view only draws it again. Objects in Edit Mode are
+read again for every redraw."""
 
 from __future__ import annotations
 
@@ -7,23 +12,23 @@ import colorsys
 import contextlib
 import hashlib
 import math
+from dataclasses import dataclass, field
 
 import blf
 import bmesh
 import bpy
 import gpu
 import numpy as np
+from bpy.app.handlers import persistent
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
 from ..blender import mesh_io, sessions
+from ..core.display import CATEGORY_KEYS, category, find_problems
 from ..core.physics import mass, value_of
+from .view import BEAM_TYPES, EXTRA_SECTIONS, settings
 
-GHOST_COLOR = (1.0, 0.55, 0.1)
-LABEL_COLOR = (1.0, 1.0, 1.0, 0.9)
-GHOST_LABEL_COLOR = (1.0, 0.7, 0.35, 0.9)
-MAX_LABELS = 4000
 BEAM_COLORS = {
     "|SUPPORT": (1.0, 0.62, 0.15),
     "|BOUNDED": (0.25, 0.55, 1.0),
@@ -31,41 +36,45 @@ BEAM_COLORS = {
     "|LBEAM": (0.35, 0.9, 0.35),
     "|PRESSURED": (0.2, 0.9, 0.9),
 }
-LEGEND_GROUPS = 12
+"""Default colours of the beam types."""
 UNKNOWN_BEAM_COLOR = (1.0, 0.25, 0.25)
 """Beam types the game does not know, such as "| BOUNDED"."""
-EXTRA_COLORS = {
-    "hydros": (0.25, 0.75, 1.0),
-    "torsionbars": (1.0, 0.85, 0.2),
-    "torsionHydros": (1.0, 0.5, 0.2),
-    "rails": (1.0, 0.3, 0.75),
-    "slidenodes": (1.0, 0.3, 0.75),
-}
-EXTRA_TITLES = {"hydros": "Hydros", "torsionbars": "Torsion bars", "torsionHydros": "Torsion hydros",
-                "rails": "Rails", "slidenodes": "Slide nodes"}
 EXTRA_KIND = {"hydros": "hydros", "torsionbars": "torsionbars", "torsionHydros": "torsionbars",
               "rails": "rails", "slidenodes": "rails"}
 """Which switch of the Kinds setting each section follows."""
+EXTRA_TITLES = {section: title for section, _, title in EXTRA_SECTIONS}
 GRADIENT = ((0.15, 0.35, 1.0), (0.1, 0.8, 0.95), (0.3, 0.9, 0.3), (1.0, 0.85, 0.2), (1.0, 0.25, 0.2))
-"""Colours of a gradient from low to high values."""
+"""Colours of the rainbow gradient from low to high values."""
+PALETTES = {
+    "RAINBOW": GRADIENT,
+    "COOLWARM": ((0.23, 0.3, 0.75), (0.55, 0.69, 0.99), (0.87, 0.87, 0.87), (0.96, 0.6, 0.48), (0.7, 0.02, 0.15)),
+    "VIRIDIS": ((0.27, 0.0, 0.33), (0.23, 0.32, 0.55), (0.13, 0.57, 0.55), (0.37, 0.79, 0.38), (0.99, 0.91, 0.14)),
+    "HEAT": ((0.3, 0.0, 0.0), (0.75, 0.1, 0.0), (1.0, 0.5, 0.0), (1.0, 0.85, 0.3), (1.0, 1.0, 0.9)),
+}
 GRADIENT_STEPS = 16
 INFINITE_COLOR = (0.8, 0.45, 1.0)
 """Values such as FLT_MAX, which do not fit a gradient."""
-CENTER_COLOR = (1.0, 1.0, 1.0)
-CENTER_SIZE = 0.12
-"""Half the length of the arms of the centre of mass cross, in metres."""
+LEGEND_ROWS = 12
+MAX_LABELS = 4000
 LINE_LIFT = 0.002
-"""How far lines and points come towards the viewer, as a part of their distance, so the faces they lie on do not
-hide them."""
+"""How far what is drawn comes towards the viewer, as a part of its distance, so the faces it lies on do not hide
+it."""
 LABEL_LIFT = 0.015
+LINE_LAYERS = ("beam", "hydros", "torsionbars", "torsionHydros", "rails", "problem", "selection")
+POINT_LAYERS = ("node", "ghost", "slidenodes", "problem", "selection")
+"""What is drawn, from bottom to top."""
 _handles: list = []
 _cache: dict = {}
+_generation = 0
+"""Counts the changes of the scene; what is kept for drawing is checked again when it changes."""
+_object_changes: dict[str, int] = {}
+"""Counts the changes of the geometry and the transform of each object."""
 
 
-def beam_color(beam_type) -> tuple | None:
+def beam_color(beam_type, colors=BEAM_COLORS, unknown=UNKNOWN_BEAM_COLOR) -> tuple | None:
     if beam_type in (None, "", "|NORMAL"):
         return None
-    return BEAM_COLORS.get(beam_type, UNKNOWN_BEAM_COLOR)
+    return colors.get(beam_type, unknown)
 
 
 def group_color(name: str) -> tuple:
@@ -74,11 +83,11 @@ def group_color(name: str) -> tuple:
     return colorsys.hsv_to_rgb((value % 360) / 360.0, 0.65, 1.0)
 
 
-def gradient_color(t: float) -> tuple:
+def gradient_color(t: float, stops=GRADIENT) -> tuple:
     """The colour at `t` between 0 (low) and 1 (high)."""
-    t = min(max(t, 0.0), 1.0) * (len(GRADIENT) - 1)
-    index = min(int(t), len(GRADIENT) - 2)
-    a, b, f = GRADIENT[index], GRADIENT[index + 1], t - index
+    t = min(max(t, 0.0), 1.0) * (len(stops) - 1)
+    index = min(int(t), len(stops) - 2)
+    a, b, f = stops[index], stops[index + 1], t - index
     return tuple(x + (y - x) * f for x, y in zip(a, b))
 
 
@@ -119,21 +128,26 @@ class Scale:
             return math.exp(math.log(self.low) + t * (math.log(self.high) - math.log(self.low)))
         return self.low + t * (self.high - self.low)
 
-    def color(self, value: float | None) -> tuple | None:
+    def color(self, value: float | None, stops=GRADIENT, infinite=INFINITE_COLOR) -> tuple | None:
         if value is None:
             return None
         if not math.isfinite(value):
-            return INFINITE_COLOR
+            return infinite
         step = round(self.at(value) * (GRADIENT_STEPS - 1))
-        return gradient_color(step / (GRADIENT_STEPS - 1))
+        return gradient_color(step / (GRADIENT_STEPS - 1), stops)
+
+
+def _kept(key, make):
+    if key not in _cache:
+        if len(_cache) > 2048:
+            _cache.clear()
+        _cache[key] = make()
+    return _cache[key]
 
 
 def _values(session, kind: str, key: str) -> tuple[dict, Scale]:
     """Values of a key for each beam uid or node id of the session's vehicle, and their scale."""
-    cache_key = (session.key, session.link.rev, kind, key)
-    if cache_key not in _cache:
-        if len(_cache) > 32:
-            _cache.clear()
+    def make():
         vehicle = session.edit.vehicle
         if kind == "beams":
             values = {uid: value_of(vehicle, vehicle.beams[g.indices[0]].props, key)
@@ -141,20 +155,65 @@ def _values(session, kind: str, key: str) -> tuple[dict, Scale]:
         else:
             values = {node_id: value_of(vehicle, node.props, key)
                       for nodes in (vehicle.nodes, vehicle.external_nodes) for node_id, node in nodes.items()}
-        _cache[cache_key] = (values, Scale(list(values.values())))
-    return _cache[cache_key]
+        return values, Scale(list(values.values()))
+    return _kept((session.key, session.link.rev, kind, key), make)
 
 
-def _format(value: float) -> str:
-    if not math.isfinite(value):
-        return "FLT_MAX"
-    return f"{value:,.0f}".replace(",", " ") if abs(value) >= 100 else f"{value:.3g}"
+def _color(value) -> tuple:
+    return tuple(round(c, 4) for c in value)
+
+
+class Style:
+    """The display settings for one redraw, read once."""
+
+    def __init__(self, display):
+        self.scope, self.dim_others, self.dim = display.scope, display.dim_others, display.dim_opacity
+        self.opacity, self.legend = display.line_opacity, display.legend
+        self.beams, self.beam_by, self.normal = display.beam_colors, display.beam_color_by, display.normal_beams
+        self.normal_color, self.unknown = _color(display.normal_color), _color(display.color_unknown)
+        self.type_colors = {beam_type: _color(getattr(display, name)) for beam_type, name in BEAM_TYPES}
+        self.width, self.extra_width = display.line_width, display.extra_width
+        if display.palette == "CUSTOM":
+            low, high = _color(display.gradient_low), _color(display.gradient_high)
+            self.stops = (low, tuple((a + b) / 2 for a, b in zip(low, high)), high)
+        else:
+            self.stops = PALETTES[display.palette]
+        self.infinite = _color(display.infinite_color)
+        self.nodes, self.node_by, self.node_color = display.node_colors, display.node_color_by, _color(display.node_color)
+        self.node_size = display.node_size
+        self.ghosts, self.ghost_color, self.ghost_size = display.ghosts, _color(display.ghost_color), display.ghost_size
+        self.extras, self.kinds = display.extras, frozenset(display.extra_kinds)
+        self.extra_colors = {section: _color(getattr(display, name)) for section, name, _ in EXTRA_SECTIONS}
+        self.selection, self.selection_color = display.selection, _color(display.selection_color)
+        self.problems, self.problem_color = display.problems, _color(display.problem_color)
+        self.labels, self.label_size = display.labels, display.label_size
+        self.label_color, self.ghost_label_color = _color(display.label_color), _color(display.ghost_label_color)
+        self.center, self.center_color = display.center_of_mass, _color(display.center_color)
+        self.selection_center = display.selection_center
+        self.selection_center_color = _color(display.selection_center_color)
+        self.center_label, self.center_size = display.center_label, display.center_size
+        self.content = (self.beams, self.beam_by, self.normal, self.normal_color, self.unknown,
+                        tuple(self.type_colors.values()), self.stops, self.infinite, self.nodes, self.node_by,
+                        self.node_color, self.ghosts, self.ghost_color, self.extras, self.kinds,
+                        tuple(self.extra_colors.values()), self.problems, self.problem_color)
+        """What decides the colours of what is drawn, as opposed to how it is drawn."""
+
+    def line_width(self, layer: str) -> float:
+        if layer == "beam":
+            return self.width
+        if layer in ("problem", "selection"):
+            return self.width + 2.0
+        return self.extra_width * (1.3 if layer == "rails" else 1.0)
+
+    def point_size(self, layer: str) -> float:
+        return {"node": self.node_size, "ghost": self.ghost_size, "slidenodes": self.node_size + 4,
+                "problem": self.node_size + 5, "selection": self.node_size + 2}[layer]
 
 
 def through(context) -> bool:
     """Whether faces let what is drawn show through: in X-ray, in wireframe, or with Through faces."""
     shading = getattr(context.space_data, "shading", None)
-    if context.window_manager.jbs_view.through_faces or shading is None:
+    if settings(context).through_faces or shading is None:
         return True
     return shading.type == "WIREFRAME" or (shading.type == "SOLID" and shading.show_xray)
 
@@ -173,6 +232,22 @@ def _faces_hide(context):
         gpu.state.blend_set("NONE")
 
 
+@contextlib.contextmanager
+def _lifted(context, amount: float):
+    """Draws what is in world space moved towards the viewer by `amount` of its distance."""
+    region_3d = context.region_data
+    if not amount or region_3d is None:
+        yield
+        return
+    if region_3d.is_perspective:
+        lift = Matrix.Diagonal((1.0 - amount, 1.0 - amount, 1.0 - amount, 1.0))
+    else:
+        lift = Matrix.Translation((0.0, 0.0, region_3d.view_distance * amount))
+    with gpu.matrix.push_pop():
+        gpu.matrix.load_matrix(lift @ region_3d.view_matrix)
+        yield
+
+
 def _lift(context, points: np.ndarray, amount: float) -> np.ndarray:
     """Points moved towards the viewer by `amount` of their distance."""
     region_3d = context.region_data
@@ -184,346 +259,472 @@ def _lift(context, points: np.ndarray, amount: float) -> np.ndarray:
     return (points + view[:3, 2] * (region_3d.view_distance * amount)).astype(np.float32)
 
 
-def _edges(obj):
-    """Vertex index pairs and beam uids of the object's edges."""
-    if obj.mode == "EDIT":
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.verts.index_update()
-        layer = bm.edges.layers.int.get(mesh_io.BEAM_UID)
-        if layer is None:
-            return None
-        return [(e.verts[0].index, e.verts[1].index) for e in bm.edges], [e[layer] for e in bm.edges]
-    mesh = obj.data
-    pairs = np.zeros(len(mesh.edges) * 2, dtype=np.int32)
-    mesh.edges.foreach_get("vertices", pairs)
-    return pairs.reshape(-1, 2).tolist(), mesh_io._read(mesh, mesh_io.BEAM_UID, "EDGE", len(mesh.edges)).tolist()
+# what objects show
+
+@dataclass
+class Geometry:
+    positions: np.ndarray
+    uids: np.ndarray
+    checks: np.ndarray
+    ghosts: np.ndarray
+    edges: np.ndarray
+    edge_uids: np.ndarray
+    selected: np.ndarray | None = None
+    edge_selected: np.ndarray | None = None
 
 
-def _beam_types(session) -> dict[int, str]:
-    beams = session.edit.vehicle.beams
-    return {uid: beams[g.indices[0]].props.get("beamType") for uid, g in session.link.map.beams.items()}
-
-
-def _world(obj, positions):
-    matrix = np.array(obj.matrix_world, dtype=np.float64)
-    return (np.c_[positions.astype(np.float64), np.ones(len(positions))] @ matrix.T)[:, :3].astype(np.float32)
-
-
-def _lines(context, by_color: dict[tuple, list], width: float) -> None:
-    view = context.window_manager.jbs_view
-    shader = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
-    shader.uniform_float("viewportSize", (context.region.width, context.region.height))
-    shader.uniform_float("lineWidth", width * context.preferences.system.ui_scale)
-    for color, points in by_color.items():
-        shader.uniform_float("color", (*color, view.line_opacity))
-        batch_for_shader(shader, "LINES", {"pos": points}).draw(shader)
-
-
-def _points(context, by_color: dict[tuple, list], size: float) -> None:
-    view = context.window_manager.jbs_view
-    shader = gpu.shader.from_builtin("POINT_UNIFORM_COLOR")
-    gpu.state.point_size_set(size * context.preferences.system.ui_scale)
-    for color, items in by_color.items():
-        shader.uniform_float("color", (*color, view.line_opacity))
-        batch_for_shader(shader, "POINTS", {"pos": items}).draw(shader)
-    gpu.state.point_size_set(1.0)
-
-
-def draw_beams() -> None:
-    context = bpy.context
-    view = context.window_manager.jbs_view
-    if not view.beam_colors and not view.group_colors:
-        return
-    with _faces_hide(context) as hidden:
-        for obj, session in _shown_objects(context):
-            data = _vertices(obj)
-            if data is None or not len(data[0]):
-                continue
-            world = _world(obj, data[0])
-            world = (_lift(context, world, LINE_LIFT) if hidden else world).tolist()
-            if view.beam_colors:
-                edges = _edges(obj)
-                if edges is not None:
-                    if view.beam_color_by == "TYPE":
-                        types = _beam_types(session)
-                        color_of = lambda uid: beam_color(types.get(uid))  # noqa: E731
-                    else:
-                        values, scale = _values(session, "beams", view.beam_color_by)
-                        color_of = lambda uid: scale.color(values.get(uid))  # noqa: E731
-                    lines: dict[tuple, list] = {}
-                    for (a, b), uid in zip(*edges):
-                        color = color_of(uid)
-                        if color is not None:
-                            lines.setdefault(color, []).extend((world[a], world[b]))
-                    _lines(context, lines, view.line_width)
-            if view.group_colors:
-                points: dict[tuple, list] = {}
-                if view.node_color_by != "GROUP":
-                    values, scale = _values(session, "nodes", view.node_color_by)
-                for index, (uid, check) in enumerate(zip(data[1].tolist(), data[2].tolist())):
-                    node_id = session.link.node_of(uid, check) or ""
-                    if view.node_color_by == "GROUP":
-                        node = sessions.node_entry(session, node_id)
-                        group = node.props.get("group") if node is not None else None
-                        group = group[0] if isinstance(group, list) and group else group
-                        color = group_color(group) if isinstance(group, str) and group else None
-                    else:
-                        color = scale.color(values.get(node_id))
-                    if color is not None:
-                        points.setdefault(color, []).append(world[index])
-                _points(context, points, 7.0)
-
-
-def _node_positions(obj, session, data, world) -> dict[str, list]:
-    found = {}
-    for index, (uid, check) in enumerate(zip(data[1].tolist(), data[2].tolist())):
-        node_id = session.link.node_of(uid, check)
-        if node_id is not None:
-            found[node_id] = world[index]
-    return found
-
-
-def draw_extras() -> None:
-    context = bpy.context
-    view = context.window_manager.jbs_view
-    if not view.extras or not view.extra_kinds:
-        return
-    with _faces_hide(context) as hidden:
-        for obj, session in _shown_objects(context):
-            extras = [e for e in session.edit.vehicle.extras if EXTRA_KIND[e.section] in view.extra_kinds]
-            data = _vertices(obj) if extras else None
-            if data is None or not len(data[0]):
-                continue
-            world = _world(obj, data[0])
-            where = _node_positions(obj, session, data, (_lift(context, world, LINE_LIFT) if hidden else world).tolist())
-            segments: dict[str, list] = {}
-            spots: list = []
-            for extra in extras:
-                chain = [where.get(node_id) for node_id in extra.ids]
-                if None in chain:
-                    continue
-                if extra.section == "slidenodes":
-                    spots.extend(chain)
-                    continue
-                if extra.section == "rails" and extra.props.get("looped") in (True, 1) and len(chain) > 2:
-                    chain.append(chain[0])
-                for a, b in zip(chain, chain[1:]):
-                    segments.setdefault(extra.section, []).extend((a, b))
-            for section, pairs in segments.items():
-                _lines(context, {EXTRA_COLORS[section]: pairs}, view.line_width * (1.6 if section == "rails" else 1.2))
-            if spots:
-                _points(context, {EXTRA_COLORS["slidenodes"]: spots}, 11.0)
-
-
-def _gradient_rows(title: str, scale: Scale) -> list[tuple[tuple | None, str]]:
-    rows = [(None, title)]
-    if scale.high > scale.low:
-        rows += [(gradient_color(t), _format(scale.value(t))) for t in (1.0, 0.75, 0.5, 0.25, 0.0)]
-    elif scale.high or scale.low:
-        rows.append((gradient_color(0.5), _format(scale.low)))
-    if scale.infinite:
-        rows.append((INFINITE_COLOR, "FLT_MAX"))
-    return rows
-
-
-def draw_legend() -> None:
-    context = bpy.context
-    view = context.window_manager.jbs_view
-    if not view.legend or not (view.beam_colors or view.group_colors or view.extras):
-        return
-    obj = context.active_object
-    session = sessions.session_of(obj)
-    if session is None:
-        return
-    rows: list[tuple[tuple | None, str]] = []
-    if view.extras:
-        counts = {}
-        for extra in session.edit.vehicle.extras:
-            if EXTRA_KIND[extra.section] in view.extra_kinds:
-                counts[extra.section] = counts.get(extra.section, 0) + 1
-        rows += [(EXTRA_COLORS[s], f"{bpy.app.translations.pgettext_iface(EXTRA_TITLES[s])}  {counts[s]}")
-                 for s in EXTRA_COLORS if s in counts]
-    if view.beam_colors and view.beam_color_by == "TYPE":
-        counts: dict[str, int] = {}
-        for beam in session.edit.vehicle.beams:
-            beam_type = beam.props.get("beamType")
-            if beam_color(beam_type) is not None:
-                counts[beam_type] = counts.get(beam_type, 0) + 1
-        rows += [(beam_color(t), f"{t}  {n}") for t, n in sorted(counts.items())]
-    elif view.beam_colors:
-        rows += _gradient_rows(view.beam_color_by, _values(session, "beams", view.beam_color_by)[1])
-    if view.group_colors and view.node_color_by == "GROUP":
-        groups = sorted(session.edit.node_groups().items(), key=lambda item: -len(item[1]))
-        rows += [(group_color(g), f"{g}  {len(n)}") for g, n in groups[:LEGEND_GROUPS]]
-        if len(groups) > LEGEND_GROUPS:
-            rows.append(((0.5, 0.5, 0.5), bpy.app.translations.pgettext_iface("and {count} more groups").format(
-                count=len(groups) - LEGEND_GROUPS)))
-    elif view.group_colors:
-        rows += _gradient_rows(view.node_color_by, _values(session, "nodes", view.node_color_by)[1])
-    if not rows:
-        return
-    scale = context.preferences.system.ui_scale
-    size, line = 12 * scale, 18 * scale
-    x, y = 16 * scale, 40 * scale
-    tools = next((r for r in context.area.regions if r.type == "TOOLS"), None) if context.area else None
-    if tools is not None and tools.width > 1 and context.preferences.system.use_region_overlap:
-        x += tools.width
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    blf.size(0, 12 * scale)
-    for color, text in reversed(rows):
-        if color is not None:
-            shader.uniform_float("color", (*color, 1.0))
-            batch_for_shader(shader, "TRIS", {"pos": [(x, y), (x + size, y), (x + size, y + size), (x, y + size)]},
-                             indices=[(0, 1, 2), (0, 2, 3)]).draw(shader)
-        blf.color(0, 1, 1, 1, 0.9)
-        blf.position(0, x + (size + 6 * scale if color is not None else 0), y + 2 * scale, 0)
-        blf.draw(0, text)
-        y += line
-
-
-def draw_center() -> None:
-    """A cross at the centre of mass of each shown vehicle, drawn over everything."""
-    context = bpy.context
-    if not context.window_manager.jbs_view.center_of_mass:
-        return
-    shown: dict[str, tuple] = {}
-    for obj, session in _shown_objects(context):
-        if session.key not in shown or obj == context.active_object:
-            shown[session.key] = (obj, session)
-    lines: list = []
-    for obj, session in shown.values():
-        cache_key = (session.key, session.link.rev, "center")
-        if cache_key not in _cache:
-            _cache[cache_key] = mass(session.edit.vehicle, session.edit.vehicle.nodes.values())[1]
-        center = _cache[cache_key]
-        if center is None:
-            continue
-        middle = obj.matrix_world @ Vector(center)
-        for axis in Matrix.Identity(3):
-            lines += [tuple(middle + axis * CENTER_SIZE), tuple(middle - axis * CENTER_SIZE)]
-    if lines:
-        gpu.state.blend_set("ALPHA")
-        _lines(context, {CENTER_COLOR: lines}, 3.0)
-        gpu.state.blend_set("NONE")
-
-
-def _vertices(obj):
-    """Positions, uids, checks, ghost flags and selection of the object's vertices."""
+def _read(obj) -> Geometry | None:
     mesh = obj.data
     if obj.mode == "EDIT":
         bm = bmesh.from_edit_mesh(mesh)
         layers = bm.verts.layers
         uid, check = layers.int.get(mesh_io.NODE_UID), layers.int.get(mesh_io.NODE_CHECK)
-        ghost = layers.bool.get(mesh_io.GHOST) if hasattr(layers, "bool") else None
         if uid is None or check is None:
             return None
+        ghost = layers.bool.get(mesh_io.GHOST) if hasattr(layers, "bool") else None
+        beam = bm.edges.layers.int.get(mesh_io.BEAM_UID)
         verts = bm.verts
-        positions = np.array([v.co for v in verts], dtype=np.float32).reshape(-1, 3)
-        uids = np.array([v[uid] for v in verts], dtype=np.int64)
-        checks = np.array([v[check] for v in verts], dtype=np.int64)
-        ghosts = np.array([bool(v[ghost]) for v in verts], dtype=bool) if ghost is not None else np.zeros(len(verts), bool)
-        selected = np.array([v.select for v in verts], dtype=bool)
-        return positions, uids, checks, ghosts, selected
+        verts.index_update()
+        count = len(verts)
+        return Geometry(
+            np.array([v.co for v in verts], dtype=np.float32).reshape(-1, 3),
+            np.fromiter((v[uid] for v in verts), dtype=np.int64, count=count),
+            np.fromiter((v[check] for v in verts), dtype=np.int64, count=count),
+            np.fromiter((bool(v[ghost]) for v in verts), dtype=bool, count=count) if ghost is not None
+            else np.zeros(count, dtype=bool),
+            np.array([(e.verts[0].index, e.verts[1].index) for e in bm.edges], dtype=np.int64).reshape(-1, 2),
+            np.fromiter((e[beam] for e in bm.edges), dtype=np.int64, count=len(bm.edges)) if beam is not None
+            else np.zeros(len(bm.edges), dtype=np.int64),
+            np.fromiter((v.select for v in verts), dtype=bool, count=count),
+            np.fromiter((e.select for e in bm.edges), dtype=bool, count=len(bm.edges)))
     count = len(mesh.vertices)
     positions = np.zeros(count * 3, dtype=np.float32)
     mesh.vertices.foreach_get("co", positions)
-    uids = mesh_io._read(mesh, mesh_io.NODE_UID, "POINT", count).astype(np.int64)
-    checks = mesh_io._read(mesh, mesh_io.NODE_CHECK, "POINT", count).astype(np.int64)
     ghosts = np.zeros(count, dtype=bool)
     attribute = mesh.attributes.get(mesh_io.GHOST)
     if attribute is not None and attribute.domain == "POINT" and count:
         attribute.data.foreach_get("value", ghosts)
-    return positions.reshape(-1, 3), uids, checks, ghosts, np.zeros(count, dtype=bool)
+    pairs = np.zeros(len(mesh.edges) * 2, dtype=np.int32)
+    mesh.edges.foreach_get("vertices", pairs)
+    return Geometry(positions.reshape(-1, 3),
+                    mesh_io._read(mesh, mesh_io.NODE_UID, "POINT", count).astype(np.int64),
+                    mesh_io._read(mesh, mesh_io.NODE_CHECK, "POINT", count).astype(np.int64), ghosts,
+                    pairs.reshape(-1, 2).astype(np.int64),
+                    mesh_io._read(mesh, mesh_io.BEAM_UID, "EDGE", len(mesh.edges)).astype(np.int64))
 
 
-def _shown_objects(context):
-    for obj in context.visible_objects:
+def _world(obj, positions: np.ndarray) -> np.ndarray:
+    matrix = np.array(obj.matrix_world, dtype=np.float64)
+    return (np.c_[positions.astype(np.float64), np.ones(len(positions))] @ matrix.T)[:, :3].astype(np.float32)
+
+
+def _names(obj, session, geometry: Geometry) -> list:
+    """The node of each vertex, or None."""
+    node_of = session.link.node_of
+    def make():
+        return [node_of(u, c) for u, c in zip(geometry.uids.tolist(), geometry.checks.tolist())]
+    if obj.mode != "EDIT":
+        return make()
+    key = ("names", obj.name, session.link.rev, hash(geometry.uids.tobytes()), hash(geometry.checks.tobytes()))
+    return _kept(key, make)
+
+
+def _beam_colors(session, style: Style) -> dict:
+    """The colour of each beam uid of the session, by what the settings colour beams by."""
+    def make():
+        vehicle, beams = session.edit.vehicle, session.link.map.beams
+        normal = style.normal_color if style.normal else None
+        if style.beam_by == "TYPE":
+            found = {}
+            for uid, group in beams.items():
+                beam_type = vehicle.beams[group.indices[0]].props.get("beamType")
+                found[uid] = beam_color(beam_type, style.type_colors, style.unknown) or normal
+            return found
+        if style.beam_by in CATEGORY_KEYS or style.beam_by == "PART":
+            found = {}
+            for uid, group in beams.items():
+                name = category(vehicle.beams[group.indices[0]], style.beam_by)
+                found[uid] = group_color(name) if name is not None else normal
+            return found
+        values, scale = _values(session, "beams", style.beam_by)
+        return {uid: scale.color(value, style.stops, style.infinite) or normal for uid, value in values.items()}
+    return _kept((session.key, session.link.rev, "beam colours", style.content), make)
+
+
+def _node_colors(session, style: Style) -> dict:
+    """The colour of each node of the session, by what the settings colour nodes by."""
+    def make():
+        vehicle = session.edit.vehicle
+        nodes = {**vehicle.external_nodes, **vehicle.nodes}
+        if style.node_by == "PLAIN":
+            return dict.fromkeys(nodes, style.node_color)
+        if style.node_by in ("GROUP", "PART"):
+            return {node_id: group_color(name) if (name := category(node, style.node_by)) else style.node_color
+                    for node_id, node in nodes.items()}
+        values, scale = _values(session, "nodes", style.node_by)
+        return {node_id: scale.color(values.get(node_id), style.stops, style.infinite) or style.node_color
+                for node_id in nodes}
+    return _kept((session.key, session.link.rev, "node colours", style.content), make)
+
+
+def _problems(session):
+    """Problems of the session's vehicle, with the uids of the problem beams."""
+    def make():
+        problems = find_problems(session.edit.vehicle)
+        uids = {uid for uid, group in session.link.map.beams.items() if problems.beams.intersection(group.indices)}
+        return problems, uids
+    return _kept((session.key, session.link.rev, "problems"), make)
+
+
+@dataclass
+class Content:
+    """What is drawn over one object, in world space."""
+    world: np.ndarray
+    names: list
+    ghosts: np.ndarray
+    selected: np.ndarray | None
+    lines: dict = field(default_factory=dict)
+    points: dict = field(default_factory=dict)
+    named: np.ndarray | None = None
+
+
+def _content(obj, session, geometry: Geometry, style: Style) -> Content:
+    world = _world(obj, geometry.positions)
+    names = _names(obj, session, geometry)
+    content = Content(world, names, geometry.ghosts, geometry.selected)
+    lines: dict[tuple, list] = {}
+    points: dict[tuple, list] = {}
+    edges = geometry.edges
+    if style.beams and len(edges):
+        table = _beam_colors(session, style)
+        _grouped(lines, "beam", [table.get(uid) for uid in geometry.edge_uids.tolist()], world[edges])
+    own = ~geometry.ghosts
+    if style.nodes and len(world):
+        table = _node_colors(session, style)
+        _grouped(points, "node", [table.get(n) if mine else None for n, mine in zip(names, own.tolist())], world)
+    if style.ghosts and geometry.ghosts.any():
+        _add(points, "ghost", style.ghost_color, world[geometry.ghosts])
+    where = None
+    if style.extras and style.kinds:
+        extras = [e for e in session.edit.vehicle.extras if EXTRA_KIND[e.section] in style.kinds]
+        if extras:
+            where = _where(names, world)
+            for extra in extras:
+                chain = [where.get(node_id) for node_id in extra.ids]
+                if None in chain:
+                    continue
+                color = style.extra_colors[extra.section]
+                if extra.section == "slidenodes":
+                    _add(points, "slidenodes", color, np.array(chain, dtype=np.float32))
+                    continue
+                if extra.section == "rails" and extra.props.get("looped") in (True, 1) and len(chain) > 2:
+                    chain.append(chain[0])
+                segments = [p for pair in zip(chain, chain[1:]) for p in pair]
+                if segments:
+                    _add(lines, extra.section, color, np.array(segments, dtype=np.float32))
+    if style.problems:
+        problems, uids = _problems(session)
+        if problems:
+            if uids and len(edges):
+                mask = np.fromiter((uid in uids for uid in geometry.edge_uids.tolist()), dtype=bool, count=len(edges))
+                if mask.any():
+                    _add(lines, "problem", style.problem_color, world[edges[mask]].reshape(-1, 3))
+            where = where if where is not None else _where(names, world)
+            outlines = []
+            for ids in problems.faces:
+                corners = [where.get(i) for i in ids]
+                if None not in corners:
+                    outlines += [p for pair in zip(corners, corners[1:] + corners[:1]) for p in pair]
+            if outlines:
+                _add(lines, "problem", style.problem_color, np.array(outlines, dtype=np.float32))
+            spots = [where[i] for i in problems.nodes if i in where]
+            if spots:
+                _add(points, "problem", style.problem_color, np.array(spots, dtype=np.float32))
+    if style.selection and geometry.selected is not None:
+        chosen = geometry.edge_selected
+        if chosen is not None and chosen.any():
+            _add(lines, "selection", style.selection_color, world[edges[chosen]].reshape(-1, 3))
+        if geometry.selected.any():
+            _add(points, "selection", style.selection_color, world[geometry.selected])
+    content.lines = {key: np.concatenate(parts).astype(np.float32) for key, parts in lines.items()}
+    content.points = {key: np.concatenate(parts).astype(np.float32) for key, parts in points.items()}
+    return content
+
+
+def _add(target: dict, layer: str, color: tuple, array: np.ndarray) -> None:
+    if len(array):
+        target.setdefault((layer, color), []).append(array.reshape(-1, 3))
+
+
+def _grouped(target: dict, layer: str, colors: list, items: np.ndarray) -> None:
+    by_color: dict[tuple, list[int]] = {}
+    for index, color in enumerate(colors):
+        if color is not None:
+            by_color.setdefault(color, []).append(index)
+    for color, indices in by_color.items():
+        _add(target, layer, color, items[indices])
+
+
+def _where(names: list, world: np.ndarray) -> dict:
+    rows = world.tolist()
+    return {name: rows[i] for i, name in enumerate(names) if name is not None}
+
+
+# what is shown
+
+@dataclass
+class Shown:
+    obj: object
+    session: object
+    dim: bool
+    content: Content
+
+
+@dataclass
+class Frame:
+    key: tuple = ()
+    shown: list = field(default_factory=list)
+    """Objects in Object Mode with what they show."""
+    merged: tuple = ()
+    draws: list = field(default_factory=list)
+    """(kind, layer, colour, dimmed, batch) of the objects in Object Mode."""
+
+
+_frame = Frame()
+_contents: dict[str, tuple[tuple, Content]] = {}
+
+
+def _shown_objects(context, style: Style, objects=None):
+    """JBeam objects to draw over, of the visible ones or of `objects`, and whether they are drawn dimmed."""
+    active = context.view_layer.objects.active
+    for obj in context.visible_objects if objects is None else objects:
+        if obj.type != "MESH":
+            continue
         session = sessions.session_of(obj)
-        if session is not None:
-            yield obj, session
+        if session is None:
+            continue
+        focus = (style.scope == "ALL" or obj == active
+                 or (style.scope == "SELECTED" and obj.select_get()))
+        if focus or style.dim_others:
+            yield obj, session, not focus
 
 
-def _screen(context, world: np.ndarray):
-    """Window coordinates, depth (from -1 to 1) and visibility of points in world space."""
-    region, region_3d = context.region, context.region_data
-    if region is None or region_3d is None or not len(world):
-        return np.zeros((0, 2)), np.zeros(0), np.zeros(0, bool)
-    transform = np.array(region_3d.perspective_matrix, dtype=np.float64)
-    points = np.c_[world.astype(np.float64), np.ones(len(world))] @ transform.T
-    visible = points[:, 3] > 1e-6
-    w = np.where(visible, points[:, 3], 1.0)
-    x = (points[:, 0] / w + 1.0) * 0.5 * region.width
-    y = (points[:, 1] / w + 1.0) * 0.5 * region.height
-    z = points[:, 2] / w
-    visible &= (x >= 0) & (x <= region.width) & (y >= 0) & (y <= region.height) & (z > -1) & (z < 1)
-    return np.c_[x, y], z, visible
+def _object_key(obj, session, style: Style) -> tuple:
+    mesh = obj.data
+    return (session.key, session.part_name, session.link.rev, _object_changes.get(obj.name, 0),
+            len(mesh.vertices), len(mesh.edges), tuple(obj.matrix_world.col[3]), tuple(obj.matrix_world.col[0]),
+            obj.jbs.all_nodes, style.content)
 
 
-def draw_ghosts() -> None:
+def _static(context, style: Style) -> Frame:
+    """The objects in Object Mode with what they show, and their batches; worked out again only when the scene,
+    a session or the settings changed."""
+    global _frame
+    active = context.view_layer.objects.active
+    key = (_generation, style.content, style.scope, style.dim_others, active.name if active else "",
+           tuple(group.link.rev for group in sessions.SESSIONS.values()))
+    if key == _frame.key:
+        return _frame
+    frame = Frame(key)
+    for obj, session, dim in _shown_objects(context, style):
+        if obj.mode == "EDIT":
+            continue
+        object_key = _object_key(obj, session, style)
+        kept = _contents.get(obj.name)
+        if kept is None or kept[0] != object_key:
+            geometry = _read(obj)
+            if geometry is None:
+                continue
+            kept = _contents[obj.name] = (object_key, _content(obj, session, geometry, style))
+        frame.shown.append(Shown(obj, session, dim, kept[1]))
+    frame.merged = tuple((id(s.content), s.dim) for s in frame.shown)
+    frame.draws = _frame.draws if frame.merged == _frame.merged else _batches(frame.shown)
+    _frame = frame
+    return frame
+
+
+def _batches(shown: list[Shown]) -> list:
+    merged: dict[tuple, list] = {}
+    for item in shown:
+        for kind, table in (("lines", item.content.lines), ("points", item.content.points)):
+            for (layer, color), array in table.items():
+                merged.setdefault((kind, layer, color, item.dim), []).append(array)
+    draws = []
+    for (kind, layer, color, dim), arrays in merged.items():
+        shader = _shader(kind)
+        array = np.ascontiguousarray(np.concatenate(arrays), dtype=np.float32)
+        draws.append((kind, layer, color, dim, batch_for_shader(shader, "LINES" if kind == "lines" else "POINTS",
+                                                                {"pos": array})))
+    return draws
+
+
+def _shader(kind: str):
+    return gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR" if kind == "lines" else "POINT_UNIFORM_COLOR")
+
+
+def _edited(context, style: Style) -> list[Shown]:
+    found = []
+    editing = [o for o in getattr(context, "objects_in_mode", None) or () if o.mode == "EDIT" and o.visible_get()]
+    for obj, session, dim in _shown_objects(context, style, editing):
+        if obj.mode == "EDIT":
+            geometry = _read(obj)
+            if geometry is not None:
+                found.append(Shown(obj, session, dim, _content(obj, session, geometry, style)))
+    return found
+
+
+def _draw(context, style: Style, draws: list) -> None:
+    """Draws (kind, layer, colour, dimmed, batch) in the order of the layers."""
+    lines, points = _shader("lines"), _shader("points")
+    scale = context.preferences.system.ui_scale
+    lines.uniform_float("viewportSize", (context.region.width, context.region.height))
+    order = {(kind, layer): i for i, (kind, layer) in enumerate(
+        [("lines", layer) for layer in LINE_LAYERS] + [("points", layer) for layer in POINT_LAYERS])}
+    for kind, layer, color, dim, batch in sorted(draws, key=lambda d: (order[d[0], d[1]], not d[3])):
+        alpha = style.opacity * (style.dim if dim else 1.0)
+        if kind == "lines":
+            lines.uniform_float("lineWidth", style.line_width(layer) * scale)
+            lines.uniform_float("color", (*color, alpha))
+            batch.draw(lines)
+        else:
+            gpu.state.point_size_set(style.point_size(layer) * scale)
+            points.uniform_float("color", (*color, alpha))
+            batch.draw(points)
+    gpu.state.point_size_set(1.0)
+
+
+def _edit_draws(edited: list[Shown]) -> list:
+    draws = []
+    for item in edited:
+        for kind, table in (("lines", item.content.lines), ("points", item.content.points)):
+            for (layer, color), array in table.items():
+                if item.dim and layer == "selection":
+                    continue
+                batch = batch_for_shader(_shader(kind), "LINES" if kind == "lines" else "POINTS", {"pos": array})
+                draws.append((kind, layer, color, item.dim, batch))
+    return draws
+
+
+def draw_view() -> None:
     context = bpy.context
-    view = context.window_manager.jbs_view
-    if not view.ghosts:
+    if context.region is None or not sessions.SESSIONS:
         return
-    with _faces_hide(context) as hidden:
-        for obj, _session in _shown_objects(context):
-            data = _vertices(obj)
-            if data is None:
-                continue
-            positions, _uids, _checks, ghosts, _selected = data
-            if not ghosts.any():
-                continue
-            world = _world(obj, positions[ghosts])
-            if hidden:
-                world = _lift(context, world, LINE_LIFT)
-            _points(context, {GHOST_COLOR: world.tolist()}, 9.0)
+    style = Style(settings(context))
+    frame = _static(context, style)
+    edited = _edited(context, style)
+    if frame.draws or edited:
+        with _faces_hide(context) as hidden, _lifted(context, LINE_LIFT if hidden else 0.0):
+            _draw(context, style, frame.draws + _edit_draws(edited))
+    shown = frame.shown + edited
+    _draw_centres(context, style, shown, edited)
+    _draw_labels(context, style, shown)
 
 
-def _depths(context) -> np.ndarray | None:
-    """The depth of the drawn scene at each pixel of the region, from 0 (near) to 1 (far). Blender 4.5 gives
-    scripts the depth of another buffer than the one the scene is drawn into, so there it is None."""
-    region = context.region
+# centres of mass
+
+def _centres(context, style: Style, shown: list[Shown], edited: list[Shown]) -> list[tuple]:
+    """(centre in world space, mass, colour) of the vehicle or part of the active object, and of the selected
+    nodes in Edit Mode."""
+    found = []
+    active = context.view_layer.objects.active
+    item = next((s for s in shown if s.obj == active), None)
+    if style.center and item is not None:
+        vehicle = item.session.edit.vehicle
+        total, centre = _kept((item.session.key, item.session.link.rev, "centre"),
+                              lambda: mass(vehicle, vehicle.nodes.values()))
+        if centre is not None:
+            found.append((item.obj.matrix_world @ Vector(centre), total, style.center_color))
+    if style.selection_center and edited:
+        total, moment, seen = 0.0, Vector((0.0, 0.0, 0.0)), set()
+        for item in edited:
+            if item.content.selected is None:
+                continue
+            vehicle = item.session.edit.vehicle
+            rows = item.content.world
+            for index in np.flatnonzero(item.content.selected).tolist():
+                node_id = item.content.names[index]
+                if node_id is None or node_id in seen:
+                    continue
+                seen.add(node_id)
+                node = sessions.node_entry(item.session, node_id)
+                weight = value_of(vehicle, node.props, "nodeWeight") if node is not None else None
+                if weight:
+                    total += weight
+                    moment += Vector(rows[index].tolist()) * weight
+        if total and len(seen) > 1:
+            found.append((moment / total, total, style.selection_center_color))
+    return found
+
+
+def _draw_centres(context, style: Style, shown: list[Shown], edited: list[Shown]) -> None:
+    centres = _centres(context, style, shown, edited)
+    if not centres:
+        return
+    lines = _shader("lines")
+    lines.uniform_float("viewportSize", (context.region.width, context.region.height))
+    lines.uniform_float("lineWidth", 3.0 * context.preferences.system.ui_scale)
+    arms: dict[tuple, list] = {}
+    for centre, _total, color in centres:
+        for axis in Matrix.Identity(3):
+            arms.setdefault(color, []).extend((tuple(centre + axis * style.center_size),
+                                               tuple(centre - axis * style.center_size)))
+    gpu.state.blend_set("ALPHA")
+    for color, points in arms.items():
+        lines.uniform_float("color", (*color, 1.0))
+        batch_for_shader(lines, "LINES", {"pos": points}).draw(lines)
+    gpu.state.blend_set("NONE")
+    _cache["centre labels"] = centres if style.center_label else []
+
+
+# node names
+
+def _depths(context, box: tuple[int, int, int, int]) -> np.ndarray | None:
+    """The depth of the drawn scene, from 0 (near) to 1 (far), in a box (x, y, width, height) of the region.
+    Blender 4.5 gives scripts the depth of another buffer than the one the scene is drawn into, so there it is
+    None."""
     if bpy.app.version < (5, 0, 0):
         return None
+    x, y, width, height = box
     try:
-        buffer = gpu.state.active_framebuffer_get().read_depth(0, 0, region.width, region.height)
-        return np.asarray(buffer, dtype=np.float32).reshape(region.height, region.width)
+        buffer = gpu.state.active_framebuffer_get().read_depth(x, y, width, height)
+        try:
+            values = np.frombuffer(buffer, dtype=np.float32)
+        except (TypeError, ValueError):
+            values = np.array(buffer.to_list(), dtype=np.float32)
+        return values.reshape(height, width)
     except (ValueError, TypeError, AttributeError, SystemError):
         return None
 
 
-def _faces_tree(context):
+def _faces_tree(shown: list[Shown]):
     """A BVH tree of the faces of the shown JBeam objects in world space, built again when they change."""
-    key, positions, polygons, offset = [], [], [], 0
-    for obj, _session in _shown_objects(context):
+    key = tuple((item.obj.name, id(item.content)) if item.obj.mode != "EDIT"
+                else (item.obj.name, hash(item.content.world.tobytes())) for item in shown)
+    cached = _cache.get("faces")
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    positions, polygons, offset = [], [], 0
+    for item in shown:
+        obj = item.obj
         if obj.mode == "EDIT":
             bm = bmesh.from_edit_mesh(obj.data)
             bm.verts.index_update()
-            local = np.array([v.co for v in bm.verts], dtype=np.float32).reshape(-1, 3)
             faces = [[v.index for v in f.verts] for f in bm.faces]
         else:
-            mesh = obj.data
-            local = np.zeros(len(mesh.vertices) * 3, dtype=np.float32)
-            mesh.vertices.foreach_get("co", local)
-            local = local.reshape(-1, 3)
-            faces = [list(p.vertices) for p in mesh.polygons]
+            faces = [list(p.vertices) for p in obj.data.polygons]
         if not faces:
             continue
-        world = _world(obj, local)
-        key.append((obj.name, len(faces), hash(world.tobytes())))
-        positions.extend(world.tolist())
+        positions.extend(item.content.world.tolist())
         polygons.extend([i + offset for i in face] for face in faces)
-        offset += len(world)
-    key = tuple(key)
-    cached = _cache.get("faces")
-    if cached is None or cached[0] != key:
-        _cache["faces"] = (key, BVHTree.FromPolygons(positions, polygons) if polygons else None)
+        offset += len(item.content.world)
+    _cache["faces"] = (key, BVHTree.FromPolygons(positions, polygons) if polygons else None)
     return _cache["faces"][1]
 
 
-def _hidden_by_faces(context, world: np.ndarray) -> np.ndarray:
+def _hidden_by_faces(context, shown: list[Shown], world: np.ndarray) -> np.ndarray:
     """Whether a face of a shown JBeam object lies between the viewer and each point; for Blender 4.5."""
     hidden = np.zeros(len(world), dtype=bool)
-    tree = _faces_tree(context)
+    tree = _faces_tree(shown)
     region_3d = context.region_data
     if tree is None or region_3d is None:
         return hidden
@@ -544,75 +745,283 @@ def _hidden_by_faces(context, world: np.ndarray) -> np.ndarray:
     return hidden
 
 
-def draw_labels() -> None:
-    """Node names; a name is left out where a face in front of its node hides the node."""
-    context = bpy.context
-    view = context.window_manager.jbs_view
+def _screen(context, world: np.ndarray):
+    """Window coordinates, depth (from -1 to 1) and visibility of points in world space."""
+    region, region_3d = context.region, context.region_data
+    if region is None or region_3d is None or not len(world):
+        return np.zeros((0, 2)), np.zeros(0), np.zeros(0, bool)
+    transform = np.array(region_3d.perspective_matrix, dtype=np.float64)
+    points = np.c_[world.astype(np.float64), np.ones(len(world))] @ transform.T
+    visible = points[:, 3] > 1e-6
+    w = np.where(visible, points[:, 3], 1.0)
+    x = (points[:, 0] / w + 1.0) * 0.5 * region.width
+    y = (points[:, 1] / w + 1.0) * 0.5 * region.height
+    z = points[:, 2] / w
+    visible &= (x >= 0) & (x <= region.width) & (y >= 0) & (y <= region.height) & (z > -1) & (z < 1)
+    return np.c_[x, y], z, visible
+
+
+def _draw_labels(context, style: Style, shown: list[Shown]) -> None:
+    """Node names, and the masses of centres of mass; a name is left out where a face in front of its node
+    hides the node."""
     region = context.region
-    if view.labels == "NONE" or region is None or not region.width or not region.height:
+    centres = _cache.pop("centre labels", [])
+    if not region.width or not region.height or (style.labels == "NONE" and not centres):
+        return
+    hide = not through(context)
+    texts: list[tuple[float, float, str, tuple]] = []
+    if style.labels != "NONE":
+        items, worlds, owners, vertices = [], [], [], []
+        for item in shown:
+            if item.dim or (style.labels == "SELECTED" and item.obj.mode != "EDIT"):
+                continue
+            named = _named(item.content)
+            if style.labels == "SELECTED":
+                named = named[item.content.selected[named]] if item.content.selected is not None else named[:0]
+            if len(named):
+                owners.append(np.full(len(named), len(items), dtype=np.int32))
+                vertices.append(named)
+                worlds.append(item.content.world[named])
+                items.append(item)
+        if items:
+            world = np.concatenate(worlds)
+            if hide and bpy.app.version >= (5, 0, 0):
+                points, ndc, visible = _screen(context, _lift(context, world, LABEL_LIFT))
+            else:
+                points, ndc, visible = _screen(context, world)
+            if hide and visible.any():
+                visible &= _not_hidden(context, shown, world, points, ndc, visible)
+            owners, vertices = np.concatenate(owners), np.concatenate(vertices)
+            for at in np.flatnonzero(visible)[:MAX_LABELS].tolist():
+                content = items[owners[at]].content
+                index = int(vertices[at])
+                x, y = points[at].tolist()
+                color = style.ghost_label_color if content.ghosts[index] else style.label_color
+                texts.append((x + 6, y + 4, content.names[index], color))
+    for centre, total, color in centres:
+        points, _ndc, visible = _screen(context, np.array([centre[:]], dtype=np.float32))
+        if visible[0]:
+            x, y = points[0].tolist()
+            texts.append((x + 10, y - 16, f"{total:,.1f} kg".replace(",", " "), color))
+    if not texts:
         return
     font = 0
-    blf.size(font, view.label_size * context.preferences.system.ui_scale)
+    blf.size(font, style.label_size * context.preferences.system.ui_scale)
     pixels = Matrix(((2.0 / region.width, 0, 0, -1), (0, 2.0 / region.height, 0, -1), (0, 0, 1, 0), (0, 0, 0, 1)))
-    hide = not through(context)
-    depths = _depths(context) if hide else None
     with gpu.matrix.push_pop(), gpu.matrix.push_pop_projection():
         gpu.matrix.load_identity()
         gpu.matrix.load_projection_matrix(pixels)
         gpu.state.blend_set("ALPHA")
-        for obj, session in _shown_objects(context):
-            if view.labels == "SELECTED" and obj.mode != "EDIT":
-                continue
-            data = _vertices(obj)
-            if data is None:
-                continue
-            positions, uids, checks, ghosts, selected = data
-            chosen = selected if view.labels == "SELECTED" else np.ones(len(uids), dtype=bool)
-            indices = np.flatnonzero(chosen)
-            if not len(indices):
-                continue
-            world = _world(obj, positions[indices])
-            if depths is not None:
-                points, ndc, visible = _screen(context, _lift(context, world, LABEL_LIFT))
-                columns = np.clip(points[:, 0].astype(int), 0, region.width - 1)
-                rows = np.clip(points[:, 1].astype(int), 0, region.height - 1)
-                visible &= (ndc + 1.0) * 0.5 <= depths[rows, columns] + 1e-6
-            else:
-                points, ndc, visible = _screen(context, world)
-                if hide:
-                    visible &= ~_hidden_by_faces(context, world)
-            ids = session.link.map.ids
-            drawn = 0
-            for index, (x, y), shown in zip(indices.tolist(), points.tolist(), visible.tolist()):
-                if not shown:
-                    continue
-                node_id = session.link.node_of(int(uids[index]), int(checks[index]))
-                if node_id is None or int(uids[index]) not in ids:
-                    continue
-                blf.color(font, *(GHOST_LABEL_COLOR if ghosts[index] else LABEL_COLOR))
-                blf.position(font, x + 6, y + 4, 0)
-                blf.draw(font, node_id)
-                drawn += 1
-                if drawn >= MAX_LABELS:
-                    break
+        for x, y, text, color in texts:
+            blf.color(font, *color, 0.9 * style.opacity)
+            blf.position(font, x, y, 0)
+            blf.draw(font, text)
         gpu.state.blend_set("NONE")
 
 
+def _named(content: Content) -> np.ndarray:
+    """Indices of the vertices that stand for nodes."""
+    if content.named is None:
+        content.named = np.fromiter((i for i, name in enumerate(content.names) if name is not None), dtype=np.int64)
+    return content.named
+
+
+def _not_hidden(context, shown, world, points, ndc, visible) -> np.ndarray:
+    region = context.region
+    if bpy.app.version < (5, 0, 0):
+        return ~_hidden_by_faces(context, shown, world)
+    xs = np.clip(points[:, 0].astype(int), 0, region.width - 1)
+    ys = np.clip(points[:, 1].astype(int), 0, region.height - 1)
+    x0, x1 = int(xs[visible].min()), int(xs[visible].max())
+    y0, y1 = int(ys[visible].min()), int(ys[visible].max())
+    depths = _depths(context, (x0, y0, x1 - x0 + 1, y1 - y0 + 1))
+    if depths is None:
+        return np.ones(len(world), dtype=bool)
+    rows, columns = np.clip(ys - y0, 0, y1 - y0), np.clip(xs - x0, 0, x1 - x0)
+    return (ndc + 1.0) * 0.5 <= depths[rows, columns] + 1e-6
+
+
+# legend
+
+def _format(value: float) -> str:
+    if not math.isfinite(value):
+        return "FLT_MAX"
+    return f"{value:,.0f}".replace(",", " ") if abs(value) >= 100 else f"{value:.3g}"
+
+
+def _gradient_rows(title: str, scale: Scale, style: Style) -> list[tuple[tuple | None, str]]:
+    rows = [(None, title)]
+    if scale.high > scale.low:
+        rows += [(gradient_color(t, style.stops), _format(scale.value(t))) for t in (1.0, 0.75, 0.5, 0.25, 0.0)]
+    elif scale.high or scale.low:
+        rows.append((gradient_color(0.5, style.stops), _format(scale.low)))
+    if scale.infinite:
+        rows.append((style.infinite, "FLT_MAX"))
+    return rows
+
+
+def _named_rows(counts: dict[str, int], fallback: tuple[tuple, str, int] | None) -> list:
+    tr = bpy.app.translations.pgettext_iface
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    rows = [(group_color(name), f"{name}  {count}") for name, count in ordered[:LEGEND_ROWS]]
+    if len(ordered) > LEGEND_ROWS:
+        rows.append(((0.5, 0.5, 0.5), tr("and {count} more").format(count=len(ordered) - LEGEND_ROWS)))
+    if fallback is not None and fallback[2]:
+        rows.append((fallback[0], f"{fallback[1]}  {fallback[2]}"))
+    return rows
+
+
+def legend_rows(session, style: Style) -> list[tuple[tuple | None, str]]:
+    """What the colours of the session's objects mean: (colour, text), or (None, title)."""
+    def make():
+        tr = bpy.app.translations.pgettext_iface
+        vehicle = session.edit.vehicle
+        rows: list[tuple[tuple | None, str]] = []
+        if style.extras:
+            counts: dict[str, int] = {}
+            for extra in vehicle.extras:
+                if EXTRA_KIND[extra.section] in style.kinds:
+                    counts[extra.section] = counts.get(extra.section, 0) + 1
+            rows += [(style.extra_colors[s], f"{tr(EXTRA_TITLES[s])}  {counts[s]}")
+                     for s, _, _ in EXTRA_SECTIONS if s in counts]
+        if style.beams:
+            others = tr("Other beams")
+            if style.beam_by == "TYPE":
+                counts = {}
+                for beam in vehicle.beams:
+                    beam_type = beam.props.get("beamType")
+                    key = beam_type if beam_color(beam_type) is not None else None
+                    counts[key] = counts.get(key, 0) + 1
+                rows += [(beam_color(t, style.type_colors, style.unknown), f"{t}  {n}")
+                         for t, n in sorted((k, v) for k, v in counts.items() if k is not None)]
+                if style.normal and counts.get(None):
+                    rows.append((style.normal_color, f"|NORMAL  {counts[None]}"))
+            elif style.beam_by in CATEGORY_KEYS or style.beam_by == "PART":
+                counts, rest = {}, 0
+                for beam in vehicle.beams:
+                    name = category(beam, style.beam_by)
+                    if name is None:
+                        rest += 1
+                    else:
+                        counts[name] = counts.get(name, 0) + 1
+                rows.append((None, CATEGORY_KEYS.get(style.beam_by, tr("Part"))))
+                rows += _named_rows(counts, (style.normal_color, others, rest) if style.normal else None)
+            else:
+                rows += _gradient_rows(style.beam_by, _values(session, "beams", style.beam_by)[1], style)
+        if style.nodes:
+            nodes = vehicle.nodes.values()
+            if style.node_by == "PLAIN":
+                rows.append((style.node_color, f"{tr('Nodes')}  {len(vehicle.nodes)}"))
+            elif style.node_by in ("GROUP", "PART"):
+                counts, rest = {}, 0
+                for node in nodes:
+                    name = category(node, style.node_by)
+                    if name is None:
+                        rest += 1
+                    else:
+                        counts[name] = counts.get(name, 0) + 1
+                rows.append((None, tr("Node groups") if style.node_by == "GROUP" else tr("Parts")))
+                rows += _named_rows(counts, (style.node_color, tr("Without a group"), rest))
+            else:
+                rows += _gradient_rows(style.node_by, _values(session, "nodes", style.node_by)[1], style)
+        if style.problems:
+            problems = _problems(session)[0]
+            count = len(problems.beams) + len(problems.faces) + len(problems.nodes)
+            if count:
+                rows.append((style.problem_color, f"{tr('Problems')}  {count}"))
+        return rows
+    return _kept((session.key, session.link.rev, "legend", style.content), make)
+
+
+def draw_pixel() -> None:
+    context = bpy.context
+    display = settings(context)
+    if not display.legend or not sessions.SESSIONS:
+        return
+    session = sessions.session_of(context.active_object)
+    if session is None:
+        return
+    rows = legend_rows(session, Style(display))
+    if not rows:
+        return
+    scale = context.preferences.system.ui_scale
+    size, line = 12 * scale, 18 * scale
+    x, y = 16 * scale, 40 * scale
+    tools = next((r for r in context.area.regions if r.type == "TOOLS"), None) if context.area else None
+    if tools is not None and tools.width > 1 and context.preferences.system.use_region_overlap:
+        x += tools.width
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    blf.size(0, 12 * scale)
+    gpu.state.blend_set("ALPHA")
+    for color, text in reversed(rows):
+        if color is not None:
+            shader.uniform_float("color", (*color, 1.0))
+            batch_for_shader(shader, "TRIS", {"pos": [(x, y), (x + size, y), (x + size, y + size), (x, y + size)]},
+                             indices=[(0, 1, 2), (0, 2, 3)]).draw(shader)
+        blf.color(0, 1, 1, 1, 0.9)
+        blf.position(0, x + (size + 6 * scale if color is not None else 0), y + 2 * scale, 0)
+        blf.draw(0, text)
+        y += line
+    gpu.state.blend_set("NONE")
+
+
+# header and handlers
+
 def draw_header(self, context) -> None:
-    """The Through faces switch in the header of the 3D viewport, when JBeam objects are open."""
+    """The Through faces switch and the JBeam display settings in the header of the 3D viewport, when JBeam
+    objects are open."""
     if sessions.SESSIONS:
-        self.layout.prop(context.window_manager.jbs_view, "through_faces", text="", icon="MOD_WIREFRAME")
+        row = self.layout.row(align=True)
+        row.prop(settings(context), "through_faces", text="", icon="MOD_WIREFRAME")
+        row.popover(panel="JBS_PT_overlay", text="JBeam")
+
+
+def changed() -> None:
+    """Makes the next redraw check what is drawn again."""
+    global _generation
+    _generation += 1
+
+
+@persistent
+def _on_depsgraph(_scene, depsgraph) -> None:
+    global _generation
+    _generation += 1
+    for update in depsgraph.updates:
+        if (update.is_updated_geometry or update.is_updated_transform) and isinstance(update.id, bpy.types.Object):
+            name = update.id.name
+            _object_changes[name] = _object_changes.get(name, 0) + 1
+
+
+@persistent
+def _on_reload(*_args) -> None:
+    global _frame
+    changed()
+    _contents.clear()
+    _cache.clear()
+    _frame = Frame()
+
+
+HANDLER_LISTS = ("undo_post", "redo_post", "load_post")
 
 
 def register() -> None:
-    for function, kind in ((draw_beams, "POST_VIEW"), (draw_extras, "POST_VIEW"), (draw_ghosts, "POST_VIEW"),
-                           (draw_labels, "POST_VIEW"), (draw_center, "POST_VIEW"), (draw_legend, "POST_PIXEL")):
-        _handles.append((bpy.types.SpaceView3D.draw_handler_add(function, (), "WINDOW", kind), "WINDOW"))
+    _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_view, (), "WINDOW", "POST_VIEW"))
+    _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_pixel, (), "WINDOW", "POST_PIXEL"))
     bpy.types.VIEW3D_HT_header.append(draw_header)
+    bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
+    for name in HANDLER_LISTS:
+        getattr(bpy.app.handlers, name).append(_on_reload)
 
 
 def unregister() -> None:
+    for name in HANDLER_LISTS:
+        handlers = getattr(bpy.app.handlers, name)
+        if _on_reload in handlers:
+            handlers.remove(_on_reload)
+    if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
     bpy.types.VIEW3D_HT_header.remove(draw_header)
-    for handle, region in _handles:
-        bpy.types.SpaceView3D.draw_handler_remove(handle, region)
+    for handle in _handles:
+        bpy.types.SpaceView3D.draw_handler_remove(handle, "WINDOW")
     _handles.clear()
+    _on_reload()

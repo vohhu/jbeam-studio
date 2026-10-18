@@ -34,3 +34,52 @@ def test_values_of_beams_fall_back_to_the_vehicle_options(car):
 def test_group_colours_are_stable_and_differ():
     assert overlay.group_color("pickup_frame") == overlay.group_color("pickup_frame")
     assert overlay.group_color("pickup_frame") != overlay.group_color("pickup_cab")
+
+
+def _imported(car):
+    import bpy
+    from jbeam_studio.blender import sessions
+    assert bpy.ops.jbs.import_pc(filepath=str(car / "base.pc")) == {"FINISHED"}
+    obj = bpy.context.active_object
+    return obj, sessions.session_of(obj)
+
+
+def test_what_an_object_shows_has_its_beams_and_its_problems(car):
+    from jbeam_studio.ui import view
+    obj, session = _imported(car)
+    display = view.settings()
+    display.normal_beams = True
+    style = overlay.Style(display)
+    content = overlay._content(obj, session, overlay._read(obj), style)
+    assert ("beam", style.normal_color) in content.lines
+    assert content.points[("problem", style.problem_color)].shape == (1, 3)
+    display.beam_color_by = "PART"
+    style = overlay.Style(display)
+    content = overlay._content(obj, session, overlay._read(obj), style)
+    assert ("beam", overlay.group_color("car_body")) in content.lines
+    display.beam_color_by = "TYPE"
+    assert overlay._object_key(obj, session, style) != overlay._object_key(obj, session, overlay.Style(display))
+
+
+def test_in_edit_mode_the_selection_is_drawn_over_and_has_one_centre_of_mass(car):
+    import bpy
+    from jbeam_studio.ui import view
+    obj, session = _imported(car)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    style = overlay.Style(view.settings())
+    content = overlay._content(obj, session, overlay._read(obj), style)
+    assert ("selection", style.selection_color) in content.lines and ("selection", style.selection_color) in content.points
+    shown = overlay.Shown(obj, session, False, content)
+    centres = overlay._centres(bpy.context, style, [shown], [shown])
+    selected = [c for c in centres if c[2] == style.selection_center_color]
+    assert len(selected) == 1 and selected[0][1] == 30.0
+    assert abs(selected[0][0].y - 1 / 3) < 1e-4
+
+
+def test_display_settings_go_back_to_their_defaults():
+    from jbeam_studio.ui import view
+    display = view.settings()
+    display.line_width, display.scope = 6.0, "ACTIVE"
+    view.reset(display)
+    assert display.line_width == 2.5 and display.scope == "ALL"

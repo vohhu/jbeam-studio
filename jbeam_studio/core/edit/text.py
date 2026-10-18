@@ -6,6 +6,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 from ..sjson import Document, Kind, Member, Node
 
@@ -315,3 +316,31 @@ def _append_lines(doc: Document, part: Node, lines: list[str]) -> list[TextEdit]
     if comma:
         edits.append(insert_into(part, value_end, comma))
     return edits
+
+
+def merge_texts(base: str, ours: str, theirs: str) -> str | None:
+    """Joins two edits of one text, line by line: the lines either side changed, kept or not, go into the result.
+    None when both change or insert at the same lines in different ways."""
+    if ours == base or ours == theirs:
+        return theirs
+    if theirs == base:
+        return ours
+    lines = base.splitlines(keepends=True)
+
+    def changes(text: str):
+        new = text.splitlines(keepends=True)
+        matcher = SequenceMatcher(None, lines, new, autojunk=False)
+        return [(i1, i2, "".join(new[j1:j2])) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != "equal"]
+
+    merged: list[str] = []
+    at = 0
+    last = None
+    for change in sorted(set(changes(ours)) | set(changes(theirs))):
+        start, end, text = change
+        if start < at or (last is not None and start == last[0] == last[1] == end):
+            return None
+        merged += lines[at:start]
+        merged.append(text)
+        at, last = end, change
+    merged += lines[at:]
+    return "".join(merged)

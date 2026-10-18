@@ -2,7 +2,7 @@ import pytest
 
 from jbeam_studio.core.edit.text import (
     TextEdit, TextEditError, apply_edits, delete_value, format_number, insert_row, insert_section, json_literal,
-    shift_expression,
+    merge_texts, shift_expression,
 )
 from jbeam_studio.core.sjson import parse, to_python
 
@@ -17,6 +17,18 @@ def test_apply_edits_rejects_overlaps():
     assert apply_edits("abcdef", [TextEdit(1, 2, "X"), TextEdit(4, 5, "Y")]) == "aXcdYf"
     with pytest.raises(TextEditError):
         apply_edits("abcdef", [TextEdit(1, 4, "X"), TextEdit(3, 5, "Y")])
+
+
+def test_merging_two_edits_of_a_text_keeps_both_unless_they_touch_the_same_lines():
+    base = 'a\r\n["n1", 1]\r\n["n2", 2]\r\n["n3", 3]\r\nb'
+    ours = 'a\r\n["n1", 1.5]\r\n["n2", 2]\r\n["n3", 3]\r\nb'
+    theirs = 'a\r\n["n1", 1]\r\n["n2", 2]\r\n["n3", 3.5]\r\n["n4", 4]\r\nb'
+    assert merge_texts(base, ours, theirs) == 'a\r\n["n1", 1.5]\r\n["n2", 2]\r\n["n3", 3.5]\r\n["n4", 4]\r\nb'
+    assert merge_texts(base, base, theirs) == theirs and merge_texts(base, ours, base) == ours
+    assert merge_texts(base, ours, ours) == ours
+    assert merge_texts(base, ours, base.replace("1]", "9]")) is None
+    assert merge_texts("a\nb\n", "a\nx\nb\n", "a\ny\nb\n") is None
+    assert merge_texts("a\nb\n", "a\nx\nb\n", "a\nb\ny\n") == "a\nx\nb\ny\n"
 
 
 def test_format_and_literals():

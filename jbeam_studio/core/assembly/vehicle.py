@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -51,8 +52,18 @@ def _directories(model_dir: Path, common_dir: Path | None = None,
     return directories, commons
 
 
+_found_directories: dict[tuple, tuple[float, tuple[list[Path], list[Path]]]] = {}
+DIRECTORIES_KEPT_FOR = 5.0
+"""Seconds the folders found for a model are used again, as every edit of a part assembles it again."""
+
+
 def _index(model_dir, common_dir, vehicle_roots, diags, overrides, closed) -> PartIndex:
-    directories, commons = _directories(model_dir, common_dir, vehicle_roots)
+    key = (str(model_dir), str(common_dir), tuple(map(str, vehicle_roots)))
+    now = time.monotonic()
+    kept = _found_directories.get(key)
+    if kept is None or now - kept[0] > DIRECTORIES_KEPT_FOR:
+        kept = _found_directories[key] = (now, _directories(model_dir, common_dir, vehicle_roots))
+    directories, commons = kept[1]
     return PartIndex(directories, diags, overrides, commons, closed)
 
 
@@ -90,7 +101,7 @@ def assemble_vehicle(model_dir: Path, config: VehicleConfig | None = None, *, co
         process_vehicle_tables(root, diags)
         merge_named_sections(root, "triggers", "triggers2", diags)
         merge_named_sections(root, "rails", "rails2", diags)
-        drop_broken_links(root, diags)
+        drop_broken_links(root, diags, vehicle.dropped)
         vehicle.data = root
         collect_entries(vehicle, root)
     if not vehicle.nodes:
@@ -141,7 +152,8 @@ def assemble_part(jbeam_path: Path, part_name: str, *, common_dir: Path | None =
         diags.add("error", SLOTS, f'part "{part_name}" not found in {jbeam_path.name}', str(jbeam_path))
         return vehicle
     vehicle.parts = {part_name: part}
-    vehicle.data, variables = _standalone(part, Resolver(diags, Evaluator(random.Random(seed))))
+    vehicle.data, variables, found = _processed(part, seed)
+    diags.extend(found)
     vehicle.variables = {name: row for name, row in variables.items() if name != COMPONENTS}
     collect_entries(vehicle, vehicle.data)
     referenced = {i for beam in vehicle.beams for i in (beam.id1, beam.id2)}
@@ -182,24 +194,52 @@ def _standalone(part: PartDef, ctx: Resolver) -> tuple[dict, dict]:
 
 def _external_nodes(index: PartIndex, wanted: set[str], exclude: str, seed: int) -> dict[str, NodeEntry]:
     found: dict[str, NodeEntry] = {}
-    quiet = Resolver(DiagnosticList(), Evaluator(random.Random(seed)))
     for part in index:
         remaining = wanted - found.keys()
         if not remaining:
             break
-        rows = part.data.get("nodes")
-        if part.name == exclude or not isinstance(rows, list):
+        if part.name == exclude:
             continue
-        ids = {row[0] for row in rows[1:] if isinstance(row, list) and row and isinstance(row[0], str)}
-        hits = remaining & ids
+        hits = remaining & _node_ids(part)
         if not hits:
             continue
-        other = AssembledVehicle(diagnostics=quiet.diags)
-        collect_entries(other, _standalone(part, quiet)[0])
+        nodes = _standalone_nodes(part, seed)
         for node_id in hits:
-            if node_id in other.nodes:
-                found[node_id] = other.nodes[node_id]
+            if node_id in nodes:
+                found[node_id] = nodes[node_id]
     return found
+
+
+def _node_ids(part: PartDef) -> frozenset:
+    """Ids in the nodes table of a part, worked out once for each text of its file."""
+    key = ("node ids", part.name)
+    if key not in part.file.cache:
+        rows = part.data.get("nodes")
+        part.file.cache[key] = frozenset(
+            row[0] for row in (rows[1:] if isinstance(rows, list) else ())
+            if isinstance(row, list) and row and isinstance(row[0], str))
+    return part.file.cache[key]
+
+
+def _processed(part: PartDef, seed: int) -> tuple[dict, dict, DiagnosticList]:
+    """A part processed on its own, its variables and the problems found, worked out once for each text of its
+    file; the result is shared and must not be changed."""
+    key = ("processed", part.name, seed)
+    if key not in part.file.cache:
+        diags = DiagnosticList()
+        data, variables = _standalone(part, Resolver(diags, Evaluator(random.Random(seed))))
+        part.file.cache[key] = (data, variables, diags)
+    return part.file.cache[key]
+
+
+def _standalone_nodes(part: PartDef, seed: int) -> dict[str, NodeEntry]:
+    """The nodes of a part processed on its own, worked out once for each text of its file."""
+    key = ("standalone nodes", part.name, seed)
+    if key not in part.file.cache:
+        other = AssembledVehicle(diagnostics=DiagnosticList())
+        collect_entries(other, _processed(part, seed)[0])
+        part.file.cache[key] = other.nodes
+    return part.file.cache[key]
 
 
 def _rows(section):

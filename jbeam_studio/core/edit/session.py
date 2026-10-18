@@ -431,7 +431,7 @@ class EditSession:
 
     def _try(self, new_texts: Mapping[Path, str]) -> AssembledVehicle:
         for path, text in new_texts.items():
-            doc = parse(text, str(path))
+            doc = load_source_file(path, text).doc
             if doc.root is None:
                 raise EditError(f"the edit would break {path.name}: {doc.diagnostics.errors()[0].message}")
         return self._assemble({**self.texts, **new_texts})

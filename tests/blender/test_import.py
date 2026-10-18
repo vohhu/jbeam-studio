@@ -32,7 +32,7 @@ def test_the_parts_of_several_files_are_chosen_or_all_imported(car):
     assert collections() == {"doors.jbeam": ["car_door_L_sport"], "engine.jbeam": ["car_engine_small"]}
     assert bpy.ops.jbs.import_jbeam_part(paths=paths, all_parts=True) == {"FINISHED"}
     assert collections() == {"doors.jbeam": ["car_door_L_sport", "car_door_L_sport", "car_door_L_stock"],
-                             "engine.jbeam": ["car_engine_small", "car_engine_small"]}
+                             "engine.jbeam": ["car_engine_small"]}
 
 
 def test_choosing_no_part_imports_nothing(car):

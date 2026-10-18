@@ -12,16 +12,22 @@ def run_checks(vehicle: AssembledVehicle) -> None:
     check_degenerate_faces(vehicle)
 
 
+def duplicate_key(beam) -> tuple | None:
+    """What two beams share when one repeats the other; None for beams that may repeat others on purpose."""
+    props = beam.props
+    if (props.get("beamSpring") == 0 or props.get("deformGroup") not in (None, "")
+            or props.get("beamType") == "|BOUNDED" or props.get("optional") is True):
+        return None
+    return (*sorted((beam.id1, beam.id2)), props.get("beamType") or "|NORMAL")
+
+
 def check_duplicate_beams(vehicle: AssembledVehicle) -> None:
     seen: dict = {}
     for beam in vehicle.beams:
-        props = beam.props
-        if (props.get("beamSpring") == 0 or props.get("deformGroup") not in (None, "")
-                or props.get("beamType") == "|BOUNDED" or props.get("optional") is True):
+        key = duplicate_key(beam)
+        if key is None:
             continue
-        beam_type = props.get("beamType") or "|NORMAL"
-        a, b = sorted((beam.id1, beam.id2))
-        key = (a, b, beam_type)
+        a, b, _ = key
         first = seen.get(key)
         if first is None:
             seen[key] = [beam, False]

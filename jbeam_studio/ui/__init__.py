@@ -4,7 +4,7 @@ import bpy
 
 from . import operators, overlay, panels, preferences, text_highlight, text_syntax, translations, view
 
-CLASSES = (*preferences.CLASSES, *view.CLASSES, *operators.CLASSES, *panels.CLASSES)
+CLASSES = (*view.CLASSES, *preferences.CLASSES, *operators.CLASSES, *panels.CLASSES)
 
 
 def register() -> None:

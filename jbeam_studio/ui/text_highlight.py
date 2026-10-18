@@ -20,6 +20,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..blender import mesh_io, sessions
 from ..core.sjson import Kind
+from . import view
 
 INTERVAL = 0.15
 COLOR = (1.0, 0.55, 0.1, 0.28)
@@ -225,8 +226,8 @@ def _update() -> None:
     wm = bpy.context.window_manager
     if wm is None or not wm.windows:
         return
-    view = wm.jbs_view
-    if not view.text_highlight or not any(True for _ in _text_spaces(wm)):
+    display = view.settings()
+    if not display.text_highlight or not any(True for _ in _text_spaces(wm)):
         _set({}, None, wm)
         return
     window = wm.windows[0]
@@ -235,12 +236,12 @@ def _update() -> None:
     if session is None or obj.mode != "EDIT" or session.stale:
         _set({}, None, wm)
         return
-    clicked = view.text_select and _select_from_text(window, obj, session, wm)
+    clicked = display.text_select and _select_from_text(window, obj, session, wm)
     select_mode = tuple(window.scene.tool_settings.mesh_select_mode)
     highlights, first = bands(session, sessions.selected_entries(obj, session, select_mode))
     moved = first != _first
     _set(highlights, first, wm)
-    if moved and view.text_follow and not clicked:
+    if moved and display.text_follow and not clicked:
         _follow(session, wm)
 
 

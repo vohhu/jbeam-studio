@@ -31,8 +31,9 @@ def _exists(section: dict, key) -> bool:
         return False
 
 
-def drop_broken_links(vehicle: dict, diags: DiagnosticList) -> None:
-    """Removes rows that reference missing entries, like the game does before it builds the physics."""
+def drop_broken_links(vehicle: dict, diags: DiagnosticList, dropped: list | None = None) -> None:
+    """Removes rows that reference missing entries, like the game does before it builds the physics; the removed
+    rows go to `dropped` with their sections."""
     for section_name, section in list(vehicle.items()):
         if not isinstance(section, dict):
             continue
@@ -79,5 +80,7 @@ def drop_broken_links(vehicle: dict, diags: DiagnosticList) -> None:
                     diags.at(src, "warning", REFERENCES,
                              f'{section_name}: "{missing}" not found in "{target_name}" ({cell_key}), row discarded',
                              fix=("mark_optional", src.node.start) if src is not None else ())
+                    if dropped is not None:
+                        dropped.append((section_name, row))
                 del section[row_key]
                 break

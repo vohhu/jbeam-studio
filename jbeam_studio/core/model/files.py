@@ -18,6 +18,17 @@ class SourceFile:
 
 _files: dict[Path, SourceFile] = {}
 _edited: dict[Path, SourceFile] = {}
+_absolute: dict = {}
+"""Paths found to be absolute already, which `Path.absolute` is slow to tell."""
+
+
+def absolute(path) -> Path:
+    found = _absolute.get(path)
+    if found is None:
+        found = Path(path).absolute()
+        if found == Path(path):
+            _absolute[path] = found
+    return found
 
 
 def read_text(path: Path) -> str:
@@ -33,7 +44,7 @@ def load_source_file(path: Path, text: str | None = None) -> SourceFile:
 
     `text` replaces the file's content on disk, for files edited in memory.
     """
-    path = Path(path).absolute()
+    path = absolute(path)
     if text is not None:
         on_disk = _files.get(path)
         if on_disk is not None and (on_disk.doc.text is text or on_disk.doc.text == text):

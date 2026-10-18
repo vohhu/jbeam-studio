@@ -214,3 +214,35 @@ def test_live_applying_can_be_turned_off(car):
     set_b2(obj, session, 0.1)
     handlers.on_undo_post()
     assert session.edit.history == []
+
+
+TWO_TRIANGLES = """{
+"p": {
+    "information": {"name": "P"},
+    "slotType": "main",
+    "nodes": [["id", "posX", "posY", "posZ"], ["a", 0, 0, 0], ["b", 1, 0, 0], ["c", 0, 1, 0], ["d", 1, 1, 0]],
+    "beams": [["id1:", "id2:"], ["a", "b"], ["b", "c"], ["c", "a"], ["b", "d"], ["d", "c"]],
+    "triangles": [["id1:", "id2:", "id3:"], ["a", "b", "c"], ["b", "d", "c"]],
+},
+}"""
+
+
+def test_subdividing_a_face_keeps_its_neighbour_which_only_gets_a_point_on_its_edge(tmp_path):
+    folder = tmp_path / "vehicles" / "two"
+    folder.mkdir(parents=True)
+    path = folder / "p.jbeam"
+    path.write_text(TWO_TRIANGLES, encoding="utf-8")
+    assert bpy.ops.jbs.import_jbeam(filepath=str(path), part_name="p") == {"FINISHED"}
+    obj = bpy.context.active_object
+    session = sessions.session_of(obj)
+    bm = edit_mesh(obj)
+    bpy.ops.mesh.select_mode(type="FACE")
+    bpy.ops.mesh.select_all(action="DESELECT")
+    min(bm.faces, key=lambda f: sum(f.calc_center_median()[:2])).select_set(True)
+    bmesh.update_edit_mesh(obj.data)
+    bpy.ops.mesh.subdivide()
+    sessions.apply_live(obj, session)
+    vehicle = session.edit.vehicle
+    triangles = [face.ids for face in vehicle.triangles]
+    assert ("b", "d", "c") in triangles and ("a", "b", "c") not in triangles and len(triangles) == 5
+    assert not vehicle.quads

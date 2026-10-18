@@ -19,7 +19,7 @@ from ..core.edit import EditError, ExternalChangeError, fixes
 from ..core.edit.mirror import AXES, mirror
 from ..core.edit.session import EXTRA_COLUMNS
 from ..core.extract import extract_vehicles
-from . import preferences
+from . import preferences, view
 
 
 def tr(text: str) -> str:
@@ -27,8 +27,12 @@ def tr(text: str) -> str:
 
 
 def active(context):
+    """The active object and its session, which first takes changes other sessions made to its files."""
     obj = context.active_object
-    return obj, sessions.session_of(obj)
+    session = sessions.session_of(obj)
+    if session is not None:
+        sessions.ensure_current(session.group)
+    return obj, session
 
 
 class _SessionPoll:
@@ -108,17 +112,21 @@ def _select_only(context, obj) -> None:
     context.view_layer.objects.active = obj
 
 
-def _finish_import(operator, context, imports: list[tuple[str, Path, list[str]]]):
+def _finish_import(operator, context, imports: list[tuple[str, Path, list[str]]], skip_empty: bool = False):
     """Imports vehicles (kind "PC") and parts of .jbeam files (kind "PART" with part names), selects what was
-    imported with the main part of the first vehicle active, and reports what was loaded."""
+    imported with the main part of the first vehicle active, and reports what was loaded. With `skip_empty`
+    parts without nodes, beams or faces are left out."""
     _start_in_object_mode(context)
     objects = []
+    requested = sum(len(parts) for _, _, parts in imports)
     for kind, path, parts in imports:
         try:
-            objects += sessions.create_objects(context, kind, path, parts, preferences.vehicle_roots())
+            objects += sessions.create_objects(context, kind, path, parts, preferences.vehicle_roots(), skip_empty)
         except (OSError, EditError) as error:
             operator.report({"ERROR"}, f"{path.name}: {error}")
     if not objects:
+        if skip_empty:
+            operator.report({"WARNING"}, tr("None of the parts has nodes, beams or faces"))
         return {"CANCELLED"}
     session = sessions.session_of(objects[0])
     main = session.edit.vehicle.main_part
@@ -138,6 +146,9 @@ def _finish_import(operator, context, imports: list[tuple[str, Path, list[str]]]
     else:
         message = tr("Loaded {count} parts from {files} files; {errors} errors, {warnings} warnings").format(
             count=len(objects), files=len({p for _, p, _ in imports}), errors=errors, warnings=warnings)
+        skipped = requested - len(objects) if skip_empty else 0
+        if skipped > 0:
+            message += "; " + tr("{count} parts without nodes, beams or faces left out").format(count=skipped)
     operator.report({"WARNING" if errors else "INFO"}, message)
     return {"FINISHED"}
 
@@ -230,7 +241,8 @@ class JBS_OT_import_jbeam_part(bpy.types.Operator):
         if not files:
             self.report({"ERROR"}, tr("Choose the parts to import"))
             return {"CANCELLED"}
-        return _finish_import(self, context, [("PART", path, names) for path, names in files.items()])
+        return _finish_import(self, context, [("PART", path, names) for path, names in files.items()],
+                              skip_empty=self.all_parts)
 
 
 class JBS_OT_import_jbeam(bpy.types.Operator, ImportHelper):
@@ -919,13 +931,29 @@ class JBS_OT_expand_extra(bpy.types.Operator):
     key: StringProperty(options={"HIDDEN"})
 
     def execute(self, context):
-        view = context.window_manager.jbs_view
-        view.expanded_extra = "" if view.expanded_extra == self.key else self.key
+        state = view.panel_state(context)
+        state.expanded_extra = "" if state.expanded_extra == self.key else self.key
+        return {"FINISHED"}
+
+
+class JBS_OT_reset_display(bpy.types.Operator):
+    bl_idname = "jbs.reset_display"
+    bl_label = "Reset Display Settings"
+    bl_description = "Set every colour, size and switch of the display back to its default"
+    bl_options = {"INTERNAL"}
+
+    def invoke(self, context, _event):
+        return context.window_manager.invoke_confirm(self, _event)
+
+    def execute(self, context):
+        view.reset(view.settings(context))
+        for area in context.screen.areas if context.screen else ():
+            area.tag_redraw()
         return {"FINISHED"}
 
 
 def _search_extra_keys(self, context, edit_text):
-    _, session = active(context)
+    session = sessions.session_of(context.active_object)
     extra = find_extra(session, self.extra) if session is not None else None
     if extra is None:
         return []
@@ -1008,7 +1036,8 @@ def value_text(value) -> str:
 def _search_keys(self, context, edit_text):
     section = {"nodes": "nodes", "beams": "beams", "faces": "triangles"}[self.kind]
     keys = dict.fromkeys(entry.key for entry in docs.all_entries() if entry.section == section)
-    obj, session = active(context)
+    obj = context.active_object
+    session = sessions.session_of(obj)
     if session is not None:
         for entry in entries_of_kind(obj, session, self.kind):
             keys.update(dict.fromkeys(k for k in entry.props if isinstance(k, str)))
@@ -1351,7 +1380,7 @@ CLASSES = (
     JBS_OT_import_pc, JBS_OT_import_jbeam_part, JBS_OT_import_jbeam, JBS_OT_apply_mesh, JBS_OT_save,
     JBS_OT_rebuild, JBS_OT_reload, JBS_OT_rescan, JBS_OT_load_object, JBS_OT_detach, JBS_OT_rename_node,
     JBS_OT_rename_nodes, JBS_OT_mirror, JBS_OT_add_resets, JBS_OT_fix, JBS_OT_add_extra, JBS_OT_add_rail,
-    JBS_OT_add_slidenodes, JBS_OT_select_extra, JBS_OT_delete_extra, JBS_OT_expand_extra,
+    JBS_OT_add_slidenodes, JBS_OT_select_extra, JBS_OT_delete_extra, JBS_OT_expand_extra, JBS_OT_reset_display,
     JBS_OT_set_extra_property, JBS_OT_set_property,
     JBS_OT_select_by_property, JBS_OT_group_select, JBS_OT_group_hide, JBS_OT_rename_group, JBS_OT_flip_faces,
     JBS_OT_select_part, JBS_OT_show_text, JBS_OT_apply_text,

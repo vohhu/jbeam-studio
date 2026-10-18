@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import bpy
-from bpy.props import BoolProperty, StringProperty
+from bpy.props import BoolProperty, PointerProperty, StringProperty
 
 from ..blender.props import AUTO_SAVE
 from ..core.edit.mirror import DEFAULT_PAIRS, parse_pairs
+from .view import JBS_ViewSettings
 
 ADDON = __package__.rpartition(".")[0]
 STEAM_VEHICLES = Path(r"C:\Program Files (x86)\Steam\steamapps\common\BeamNG.drive\content\vehicles")
@@ -38,11 +39,16 @@ class JBS_Preferences(bpy.types.AddonPreferences):
                                    description="Letters at the end of node ids that mirroring across Y swaps")
     mirror_pairs_z: StringProperty(name="Side letters across Z", default="t:d, tt:dd",
                                    description="Letters at the end of node ids that mirroring across Z swaps")
+    display: PointerProperty(type=JBS_ViewSettings)
 
     def draw(self, _context):
         layout = self.layout
         layout.prop(self, "vehicles_dir")
         layout.prop(self, "auto_save")
+        row = layout.row()
+        row.label(text="Display settings are in the JBeam tab of the sidebar and in the viewport header",
+                  icon="OVERLAY")
+        row.operator("jbs.reset_display", icon="LOOP_BACK")
         column = layout.column(align=True)
         for axis in "xyz":
             column.prop(self, f"mirror_pairs_{axis}")

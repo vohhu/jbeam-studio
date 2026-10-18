@@ -139,8 +139,53 @@ def name_like(source: str, position, taken: set[str]) -> str:
     return f"{prefix}{number}{suffix}"
 
 
+_digests: OrderedDict[int, tuple[str, bytes]] = OrderedDict()
+DIGESTS_KEPT = 64
+
+
 def _digest(text: str) -> bytes:
-    return hashlib.sha1(text.encode("utf-8")).digest()
+    """Digest of a text; the sessions of one file share its text objects, so recent ones are kept by identity."""
+    kept = _digests.get(id(text))
+    if kept is not None and kept[0] is text:
+        return kept[1]
+    digest = hashlib.sha1(text.encode("utf-8", errors="surrogateescape")).digest()
+    _digests[id(text)] = (text, digest)
+    while len(_digests) > DIGESTS_KEPT:
+        _digests.popitem(last=False)
+    return digest
+
+
+def _with_points_on_edges(verts, keys, positions, face_keys: dict, uid_map) -> int | None:
+    """The existing face that a mesh face is, when the mesh face has only gained new vertices on its edges, as the
+    neighbours of a subdivided face or of a cut edge do; None otherwise."""
+    corners = [i for i, key in enumerate(keys) if key > 0]
+    if len(corners) not in (3, 4) or len(corners) == len(keys):
+        return None
+    existing = face_keys.get(frozenset(keys[i] for i in corners))
+    if existing is None or len(uid_map.faces[existing].nodes) != len(corners):
+        return None
+    count = len(keys)
+    for index, key in enumerate(keys):
+        if key > 0:
+            continue
+        before = next((index - step) % count for step in range(1, count) if keys[(index - step) % count] > 0)
+        after = next((index + step) % count for step in range(1, count) if keys[(index + step) % count] > 0)
+        if not _on_segment(positions[verts[index]], positions[verts[before]], positions[verts[after]]):
+            return None
+    return existing
+
+
+def _on_segment(point, start, end) -> bool:
+    direction = [b - a for a, b in zip(start, end)]
+    length = sum(d * d for d in direction)
+    if length <= 0:
+        return False
+    offset = [p - a for a, p in zip(start, point)]
+    t = sum(o * d for o, d in zip(offset, direction)) / length
+    if not 0 < t < 1:
+        return False
+    away = sum((o - t * d) ** 2 for o, d in zip(offset, direction))
+    return away <= (1e-4 ** 2) * length + 1e-12
 
 
 def _moved(position, target) -> bool:
@@ -506,11 +551,15 @@ class MeshLink:
                 unmatched.append((verts, uid, ordered))
         for verts, uid, ordered in unmatched:
             existing = face_keys.get(frozenset(ordered))
+            widened = None if existing is not None else _with_points_on_edges(verts, ordered, mesh.positions,
+                                                                               face_keys, uid_map)
             if existing is not None and len(uid_map.faces[existing].nodes) == len(ordered):
                 if existing not in kept:
                     kept.add(existing)
                     if _reversed(ordered, uid_map.faces[existing].nodes):
                         plan.flipped_faces.append(existing)
+            elif widened is not None:
+                kept.add(widened)
             elif len(verts) in (3, 4) and len(set(ordered)) == len(ordered):
                 copied = uid_map.faces.get(uid) if uid > 0 else None
                 if copied is not None:

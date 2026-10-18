@@ -14,10 +14,12 @@ from ..core.diagnostics import Severity
 from ..core.edit import fixes
 from ..core.physics import mass
 from ..core.sjson import Kind
+from . import view
 from .operators import (
     EXTRA_ICONS, FIX_GROUPS, entries_of_kind, extra_key, extra_label, extra_properties, fixable, kind_of_select_mode,
     saved_time, summary, tr, value_text,
 )
+from .view import BEAM_TYPES, CATEGORIES, EXTRA_SECTIONS
 
 HIDDEN_KEYS = {"slotType", "partName", "partOrigin", "partPath", "skinName", "globalSkin", "name",
                "posX", "posY", "posZ", "id1:", "id2:", "id3:", "id4:"}
@@ -293,9 +295,9 @@ class JBS_PT_groups(_SessionPanel, bpy.types.Panel):
         layout = self.layout
         obj = context.active_object
         session = sessions.session_of(obj)
-        view = context.window_manager.jbs_view
-        layout.prop(view, "all_groups")
-        groups = session.edit.node_groups(None if view.all_groups else obj.jbs.active_part or None)
+        state = view.panel_state(context)
+        layout.prop(state, "all_groups")
+        groups = session.edit.node_groups(None if state.all_groups else obj.jbs.active_part or None)
         if not groups:
             layout.label(text="No node groups", icon="INFO")
             return
@@ -330,7 +332,6 @@ class JBS_PT_extras(_SessionPanel, bpy.types.Panel):
             grid.operator("jbs.add_slidenodes", text="Slide Nodes", icon=EXTRA_ICONS["slidenodes"])
         else:
             layout.label(text="Add them from selected nodes in Edit Mode", icon="INFO")
-        layout.prop(context.window_manager.jbs_view, "extras")
         extras = session.edit.vehicle.extras
         if not extras:
             layout.label(text="No hydros, torsion bars or rails")
@@ -340,7 +341,7 @@ class JBS_PT_extras(_SessionPanel, bpy.types.Panel):
         layout.label(text=tr("Using the selected nodes: {count}").format(count=len(shown)) if selected
                      else tr("All: {count}").format(count=len(shown)))
         column = layout.column(align=True)
-        expanded = context.window_manager.jbs_view.expanded_extra
+        expanded = view.panel_state(context).expanded_extra
         for index, extra in shown[:EXTRAS_SHOWN]:
             key = extra_key(extra)
             row = column.row(align=True)
@@ -396,19 +397,6 @@ class JBS_PT_tools(_SessionPanel, bpy.types.Panel):
         column.operator("jbs.flip_faces", icon="UV_SYNC_SELECT")
         column.operator("jbs.select_part", icon="RESTRICT_SELECT_OFF")
         column.operator("jbs.add_resets", icon="LOOP_BACK")
-        layout.operator("jbs.show_text", icon="TEXT")
-        view = context.window_manager.jbs_view
-        row = layout.row(align=True)
-        row.prop(view, "text_highlight", toggle=True, icon="SELECT_SET")
-        row.prop(view, "text_follow", toggle=True, icon="VIEWZOOM")
-        row.prop(view, "text_select", toggle=True, icon="RESTRICT_SELECT_OFF")
-        row = layout.row(align=True)
-        row.prop(view, "text_syntax", toggle=True, icon="COLOR")
-        row.prop(view, "text_problems", toggle=True, icon="ERROR")
-        for text in bpy.data.texts:
-            if text.get(sessions.TEXT_SESSION) == session.key and sessions.text_edited(text):
-                layout.operator("jbs.apply_text", text=tr("Apply {name}").format(name=text.name),
-                                icon="CHECKMARK").text_name = text.name
 
 
 class JBS_PT_diagnostics(_SessionPanel, bpy.types.Panel):
@@ -426,11 +414,11 @@ class JBS_PT_diagnostics(_SessionPanel, bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        view = context.window_manager.jbs_view
+        state = view.panel_state(context)
         session = sessions.session_of(context.active_object)
-        layout.prop(view, "severity", expand=True)
+        layout.prop(state, "severity", expand=True)
         shown = [(i, d) for i, d in enumerate(session.edit.vehicle.diagnostics)
-                 if view.severity == "ALL" or d.severity.value == view.severity]
+                 if state.severity == "ALL" or d.severity.value == state.severity]
         if not shown:
             layout.label(text="No problems found", icon="CHECKMARK")
             return
@@ -441,7 +429,7 @@ class JBS_PT_diagnostics(_SessionPanel, bpy.types.Panel):
                 if groups[group]:
                     column.operator("jbs.fix", text=tr(label).format(count=groups[group]),
                                     icon="TOOL_SETTINGS").group = group
-        limit = len(shown) if view.all_diagnostics else DIAGNOSTICS_SHOWN
+        limit = len(shown) if state.all_diagnostics else DIAGNOSTICS_SHOWN
         for index, diagnostic in shown[:limit]:
             box = layout.box()
             row = box.row()
@@ -457,43 +445,214 @@ class JBS_PT_diagnostics(_SessionPanel, bpy.types.Panel):
                 operator.path = diagnostic.file
                 operator.line = diagnostic.line or 0
         if len(shown) > DIAGNOSTICS_SHOWN:
-            layout.prop(view, "all_diagnostics", text=tr("Show all {count}").format(count=len(shown)))
+            layout.prop(state, "all_diagnostics", text=tr("Show all {count}").format(count=len(shown)))
 
 
-class JBS_PT_view(_Panel, bpy.types.Panel):
-    bl_idname = "JBS_PT_view"
-    bl_label = "View"
+class JBS_PT_text(_Panel, bpy.types.Panel):
+    bl_idname = "JBS_PT_text"
+    bl_label = "Text Editor"
     bl_parent_id = "JBS_PT_main"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
-        view = context.window_manager.jbs_view
-        layout.prop(view, "labels", expand=True)
-        layout.prop(view, "label_size")
-        layout.prop(view, "ghosts")
-        layout.prop(view, "through_faces", icon="MOD_WIREFRAME")
+        session = sessions.session_of(context.active_object)
+        if session is not None:
+            layout.operator("jbs.show_text", icon="TEXT")
+        display = view.settings(context)
         column = layout.column(align=True)
         row = column.row(align=True)
-        row.prop(view, "beam_colors", toggle=True)
-        row.prop(view, "beam_color_by", text="")
+        row.prop(display, "text_highlight", toggle=True, icon="SELECT_SET")
+        row.prop(display, "text_follow", toggle=True, icon="VIEWZOOM")
         row = column.row(align=True)
-        row.prop(view, "group_colors", toggle=True)
-        row.prop(view, "node_color_by", text="")
-        layout.prop(view, "extras")
-        row = layout.row(align=True)
-        row.active = view.extras
-        row.prop(view, "extra_kinds", expand=True)
+        row.prop(display, "text_select", toggle=True, icon="RESTRICT_SELECT_OFF")
+        row.prop(display, "text_syntax", toggle=True, icon="COLOR")
+        column.prop(display, "text_problems", toggle=True, icon="ERROR")
+        if session is None:
+            return
+        for text in bpy.data.texts:
+            if text.get(sessions.TEXT_SESSION) == session.key and sessions.text_edited(text):
+                layout.operator("jbs.apply_text", text=tr("Apply {name}").format(name=text.name),
+                                icon="CHECKMARK").text_name = text.name
+
+
+# display settings, in the sidebar and in the viewport header
+
+def _split(layout):
+    layout.use_property_split = True
+    layout.use_property_decorate = False
+    return layout
+
+
+def _gradient(layout, display) -> None:
+    layout.prop(display, "palette")
+    if display.palette == "CUSTOM":
+        layout.prop(display, "gradient_low")
+        layout.prop(display, "gradient_high")
+    layout.prop(display, "infinite_color")
+
+
+def draw_display(layout, display) -> None:
+    layout.prop(display, "scope", expand=True)
+    row = layout.row(align=True)
+    row.active = display.scope != "ALL"
+    row.prop(display, "dim_others", toggle=True, icon="GHOST_ENABLED")
+    sub = row.row(align=True)
+    sub.active = display.dim_others and display.scope != "ALL"
+    sub.prop(display, "dim_opacity", text="", slider=True)
+    row = layout.row(align=True)
+    row.prop(display, "through_faces", toggle=True, icon="MOD_WIREFRAME")
+    row.prop(display, "legend", toggle=True, icon="PRESET")
+    layout.prop(display, "line_opacity", slider=True)
+
+
+def draw_display_beams(layout, display) -> None:
+    layout = _split(layout)
+    layout.active = display.beam_colors
+    layout.prop(display, "beam_color_by", text="Colour by")
+    by = display.beam_color_by
+    if by == "TYPE" or by in CATEGORIES:
+        row = layout.row(heading=tr("Normal beams") if by == "TYPE" else tr("Without a group"))
+        row.prop(display, "normal_beams", text="")
+        sub = row.row()
+        sub.active = display.normal_beams
+        sub.prop(display, "normal_color", text="")
+    if by == "TYPE":
         column = layout.column(align=True)
-        column.prop(view, "line_width")
-        column.prop(view, "line_opacity", slider=True)
-        layout.prop(view, "center_of_mass")
-        layout.prop(view, "legend")
-        layout.prop(view, "text_highlight")
-        layout.prop(view, "text_follow")
-        layout.prop(view, "text_syntax")
-        layout.prop(view, "text_problems")
+        for _beam_type, name in BEAM_TYPES:
+            column.prop(display, name)
+        column.prop(display, "color_unknown")
+    elif by not in CATEGORIES:
+        _gradient(layout, display)
+    layout.prop(display, "line_width")
 
 
-CLASSES = (JBS_PT_main, JBS_PT_settings, JBS_PT_selection, JBS_PT_groups, JBS_PT_extras, JBS_PT_tools,
-           JBS_PT_diagnostics, JBS_PT_view)
+def draw_display_nodes(layout, display) -> None:
+    layout = _split(layout)
+    column = layout.column()
+    column.active = display.node_colors
+    column.prop(display, "node_color_by", text="Colour by")
+    if display.node_color_by == "nodeWeight":
+        _gradient(column, display)
+    column.prop(display, "node_color", text="Colour" if display.node_color_by == "PLAIN" else "Without a group")
+    column.prop(display, "node_size")
+    row = layout.row(heading=tr("Other parts"))
+    row.prop(display, "ghosts", text="")
+    sub = row.row(align=True)
+    sub.active = display.ghosts
+    sub.prop(display, "ghost_color", text="")
+    sub.prop(display, "ghost_size", text="")
+
+
+def draw_display_extras(layout, display) -> None:
+    layout.active = display.extras
+    layout.row(align=True).prop(display, "extra_kinds", expand=True)
+    layout = _split(layout)
+    column = layout.column(align=True)
+    for _section, name, _title in EXTRA_SECTIONS:
+        column.prop(display, name)
+    layout.prop(display, "extra_width")
+
+
+def draw_display_highlights(layout, display) -> None:
+    layout = _split(layout)
+    for switch, color in (("selection", "selection_color"), ("problems", "problem_color")):
+        row = layout.row(heading=display.bl_rna.properties[switch].name)
+        row.prop(display, switch, text="")
+        sub = row.row()
+        sub.active = getattr(display, switch)
+        sub.prop(display, color, text="")
+
+
+def draw_display_names(layout, display) -> None:
+    layout.row(align=True).prop(display, "labels", expand=True)
+    layout = _split(layout)
+    layout.active = display.labels != "NONE"
+    layout.prop(display, "label_size")
+    layout.prop(display, "label_color", text="Colour")
+    layout.prop(display, "ghost_label_color", text="Other parts")
+
+
+def draw_display_center(layout, display) -> None:
+    layout = _split(layout)
+    row = layout.row()
+    row.active = display.center_of_mass
+    row.prop(display, "center_color")
+    row = layout.row(heading=tr("Selected nodes"))
+    row.prop(display, "selection_center", text="")
+    sub = row.row()
+    sub.active = display.selection_center
+    sub.prop(display, "selection_center_color", text="")
+    layout.prop(display, "center_label")
+    layout.prop(display, "center_size")
+
+
+DISPLAY_SECTIONS = (
+    ("beams", "Beams", draw_display_beams, "beam_colors", False),
+    ("nodes", "Nodes", draw_display_nodes, "node_colors", False),
+    ("extras", "Hydros and Rails", draw_display_extras, "extras", True),
+    ("highlights", "Selection and Problems", draw_display_highlights, None, True),
+    ("names", "Node Names", draw_display_names, None, True),
+    ("center", "Centre of Mass", draw_display_center, "center_of_mass", True),
+)
+"""Parts of the display settings: name, title, how to draw them, the switch in their header, closed at first."""
+
+
+class JBS_PT_display(_Panel, bpy.types.Panel):
+    bl_idname = "JBS_PT_display"
+    bl_label = "Display"
+    bl_parent_id = "JBS_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header_preset(self, _context):
+        self.layout.operator("jbs.reset_display", text="", icon="LOOP_BACK", emboss=False)
+
+    def draw(self, context):
+        draw_display(self.layout, view.settings(context))
+
+
+class JBS_PT_overlay(bpy.types.Panel):
+    bl_idname = "JBS_PT_overlay"
+    bl_label = "JBeam Display"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "HEADER"
+    bl_ui_units_x = 14
+
+    def draw(self, context):
+        row = self.layout.row()
+        row.label(text="JBeam Display", icon="OVERLAY")
+        row.operator("jbs.reset_display", text="", icon="LOOP_BACK", emboss=False)
+        draw_display(self.layout, view.settings(context))
+
+
+def _drawer(draw):
+    def method(self, context):
+        draw(self.layout, view.settings(context))
+    return method
+
+
+def _switch(name: str):
+    def method(self, context):
+        self.layout.prop(view.settings(context), name, text="")
+    return method
+
+
+def _section_panels(parent: type, prefix: str) -> list[type]:
+    classes = []
+    for name, title, draw, switch, closed in DISPLAY_SECTIONS:
+        attributes = {
+            "bl_idname": f"{prefix}_{name}", "bl_label": title, "bl_space_type": "VIEW_3D",
+            "bl_region_type": parent.bl_region_type, "bl_parent_id": parent.bl_idname,
+            "bl_options": {"DEFAULT_CLOSED"} if closed else set(), "draw": _drawer(draw),
+        }
+        if parent.bl_region_type == "UI":
+            attributes["bl_category"] = _Panel.bl_category
+        if switch is not None:
+            attributes["draw_header"] = _switch(switch)
+        classes.append(type(f"{prefix}_{name}", (bpy.types.Panel,), attributes))
+    return classes
+
+
+CLASSES = (JBS_PT_main, JBS_PT_selection, JBS_PT_display, *_section_panels(JBS_PT_display, "JBS_PT_display"),
+           JBS_PT_text, JBS_PT_settings, JBS_PT_tools, JBS_PT_groups, JBS_PT_extras, JBS_PT_diagnostics,
+           JBS_PT_overlay, *_section_panels(JBS_PT_overlay, "JBS_PT_overlay"))

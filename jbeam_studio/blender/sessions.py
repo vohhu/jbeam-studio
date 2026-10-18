@@ -14,7 +14,8 @@ from ..core.assembly import BeamEntry, FaceEntry, NodeEntry
 from ..core.assembly.index import parts_in_file
 from ..core.edit import EditError, EditSession, ExternalChangeError, MoveMode
 from ..core.mesh_sync import MeshLink, SyncPlan
-from ..core.model.files import load_source_file
+from ..core.edit.text import merge_texts
+from ..core.model.files import load_source_file, read_text
 from . import mesh_io
 
 ADDON = __package__.rpartition(".")[0]
@@ -43,6 +44,10 @@ class Group:
         self.saved_files: list[str] = []
         self.shared: dict[Path, str] = {}
         """Text of each file as last passed between sessions, for files the session changed since reading them."""
+        self.pending: dict[Path, tuple[str, str]] = {}
+        """Changes other sessions made to files of this one and it has not taken yet: its text, and theirs."""
+        self.quiet: dict[Path, tuple] = {}
+        """File states on disk that are only the changes it has still to take, so they are not reported."""
 
 
 def _shared(name: str):
@@ -145,9 +150,10 @@ def file_collection(context, path: Path, group_key: str = ""):
     return collection
 
 
-def create_objects(context, kind: str, path: Path, part_names=(), roots=()) -> list[bpy.types.Object]:
+def create_objects(context, kind: str, path: Path, part_names=(), roots=(), skip_empty: bool = False) -> list[bpy.types.Object]:
     """Opens a vehicle, or parts of a .jbeam file, and adds an object for each part to the collection of its
-    file under the JBeam collection. A vehicle gets one object for each of its parts that has something to show."""
+    file under the JBeam collection. A vehicle gets one object for each of its parts that has something to show,
+    and so do the parts of a file with `skip_empty`."""
     path = Path(path).absolute()
     objects = []
     if kind == "PC":
@@ -163,6 +169,9 @@ def create_objects(context, kind: str, path: Path, part_names=(), roots=()) -> l
         return objects
     for part in part_names:
         group = _new_group(open_edit_session(kind, path, part, roots), kind, path)
+        if skip_empty and not has_geometry(group.edit, part):
+            SESSIONS.pop(group.key, None)
+            continue
         objects.append(_new_object(context, group, part, file_collection(context, path), roots))
     return objects
 
@@ -434,13 +443,21 @@ def sync_others(session: ObjectSession) -> None:
 
 
 _sharing = False
+_refresh: dict[str, Group] = {}
+"""Sessions with changes of other sessions to take, whose objects show what changed, by key."""
+_last_share = 0.0
+REFRESH_DELAY = 0.6
+"""Pause after the last change before other sessions that show what changed take it."""
+REFRESH_BUDGET = 0.03
+"""Time spent taking changes in one tick of the timer, so the viewport stays smooth meanwhile."""
 
 
 def share_changes(session: ObjectSession) -> None:
     """Passes the session's changes of files to the other sessions that read the same files, such as other parts
-    of one .jbeam file imported on their own: a session that has the file as it was before the change takes the
-    change as a step of its own history and builds its objects again; one that changed the file itself keeps it."""
-    global _sharing
+    of one .jbeam file imported on their own. A session that has the file as it was before the change keeps the
+    change to take later (`ensure_current`): before it edits or saves anything, or, if its objects show what the
+    file defines, once editing pauses. A session that changed the file itself keeps its own text."""
+    global _last_share
     group = session.group
     if _sharing:
         return
@@ -453,37 +470,128 @@ def share_changes(session: ObjectSession) -> None:
             group.shared[path] = text
     if not changed:
         return
+    spans = {path: _changed_span(before, text) for path, (before, text) in changed.items()}
+    for other in SESSIONS.values():
+        if other is group or not other.views:
+            continue
+        for path, (before, text) in changed.items():
+            if not other.edit.knows(path):
+                continue
+            own = other.edit.text_of(path)
+            seen = other.pending.get(path, (own, own))[1]
+            if seen not in (before, text):
+                continue
+            if own == text:
+                other.pending.pop(path, None)
+            else:
+                other.pending[path] = (own, text)
+                if _shows_change(other, path, spans[path] if own == before else None):
+                    _refresh[other.key] = other
+            other.shared[path] = text
+    if _refresh:
+        _last_share = time.perf_counter()
+        if not bpy.app.timers.is_registered(_take_shared):
+            bpy.app.timers.register(_take_shared, first_interval=REFRESH_DELAY)
+
+
+def _changed_span(before: str, after: str) -> tuple[int, int]:
+    """The span of `before` from its first difference to `after` to its last one."""
+    shorter = min(len(before), len(after))
+    low, high = 0, shorter
+    while low < high:
+        middle = (low + high + 1) // 2
+        if before[:middle] == after[:middle]:
+            low = middle
+        else:
+            high = middle - 1
+    start = low
+    low, high = 0, shorter - start
+    while low < high:
+        middle = (low + high + 1) // 2
+        if before[len(before) - middle:] == after[len(after) - middle:]:
+            low = middle
+        else:
+            high = middle - 1
+    return start, len(before) - low
+
+
+def _shows_change(group: Group, path: Path, span: tuple[int, int] | None) -> bool:
+    """Whether the objects of a session show something a file defines in a changed span of the session's text of
+    the file: a part, or nodes of other parts. Without a span, whether they show anything the file defines."""
+    vehicle = group.edit.vehicle
+
+    def touched(src) -> bool:
+        if src is None or Path(src.file) != path:
+            return False
+        return span is None or (src.node.start <= span[1] and span[0] <= src.node.end)
+
+    return (any(touched(part.data.src) for part in vehicle.parts.values())
+            or any(touched(node.src) for node in vehicle.external_nodes.values()))
+
+
+def _take_shared() -> float | None:
+    if time.perf_counter() - _last_share < REFRESH_DELAY:
+        return REFRESH_DELAY
+    started = time.perf_counter()
+    for key, group in list(_refresh.items()):
+        if time.perf_counter() - started > REFRESH_BUDGET:
+            return 0.05
+        if SESSIONS.get(key) is not group:
+            del _refresh[key]
+        elif not any(o.mode == "EDIT" for o, _ in _objects(group)):
+            del _refresh[key]
+            ensure_current(group)
+    return 1.0 if _refresh else None
+
+
+def _objects(group: Group) -> list:
+    return [(o, v) for v in group.views.values() if (o := object_of(v)) is not None]
+
+
+def ensure_current(group: Group) -> bool:
+    """Takes the changes other sessions made to the session's files, as one step of its history, and builds its
+    objects again. Unapplied mesh edits of the objects are applied first; where the session itself changed a file
+    since, the changes of both are joined line by line, and only its own are kept where both touched the same lines.
+    Returns whether the session changed."""
+    global _sharing
+    if isinstance(group, ObjectSession):
+        group = group.group
+    if not group.pending or _sharing:
+        return False
+    _refresh.pop(group.key, None)
+    views = _objects(group)
     _sharing = True
     try:
-        for other in list(SESSIONS.values()):
-            if other is group or not other.views:
-                continue
-            taken = {}
-            for path, (before, text) in changed.items():
-                if not other.edit.knows(path):
-                    continue
-                current = other.edit.text_of(path)
-                if current == before:
-                    taken[path] = text
-                if current in (before, text):
-                    other.shared[path] = text
-            if not taken:
-                continue
-            views = [(o, v) for v in other.views.values() if (o := object_of(v)) is not None]
-            try:
-                editing = [(o, v) for o, v in views if o.mode == "EDIT"]
-                if editing:
-                    commit_edit_mesh(*editing[0])
-                with other.edit.transaction(f"Take the edits of {', '.join(p.name for p in taken)}"):
-                    for path, text in taken.items():
-                        other.edit.replace_text(path, text)
-            except EditError:
-                continue
-            other.link.changed()
-            for obj, view in views:
-                rebuild(obj, view, others=False)
+        editing = [(o, v) for o, v in views if o.mode == "EDIT"]
+        if editing:
+            commit_edit_mesh(*editing[0])
+        for index, (obj, view) in enumerate((o, v) for o, v in views if o.mode != "EDIT"):
+            if not in_sync(obj, view):
+                mirror(obj, view, follow=index == 0 and not editing)
+        pending, group.pending = group.pending, {}
+        taken = {}
+        for path, (before, theirs) in pending.items():
+            own = group.edit.text_of(path)
+            text = merge_texts(before, own, theirs)
+            if text is not None and text != own:
+                taken[path] = text
+        if not taken:
+            return False
+        with group.edit.transaction(f"Take the edits of {', '.join(p.name for p in taken)}"):
+            for path, text in taken.items():
+                group.edit.replace_text(path, text)
+    except EditError:
+        return False
     finally:
         _sharing = False
+    for path in taken:
+        group.edit.accept_disk(path)
+    group.link.changed()
+    for obj, view in views:
+        rebuild(obj, view, others=False)
+    if views:
+        share_changes(views[0][1])
+    return True
 
 
 def _shape(data) -> int:
@@ -568,6 +676,7 @@ def mirror(obj, session: ObjectSession, follow: bool = True) -> bool:
     session then shows the state the mesh was built from. Without `follow` the session stays in its state, for
     a mesh of another part applied right after one that moved it there.
     """
+    ensure_current(session.group)
     before = session.link.rev
     rev = mesh_io.mesh_rev(obj)
     if follow and rev is not None and rev != before and not session.link.goto(rev):
@@ -676,8 +785,23 @@ def watched_files(session: ObjectSession) -> list[Path]:
 
 
 def check_disk(session: ObjectSession) -> bool:
-    """Updates `changed_on_disk`; True if it changed."""
-    changed = [p for p in session.edit.changed_on_disk(watched_files(session)) if not session.edit.accept_disk(p)]
+    """Updates `changed_on_disk`; True if it changed. A file on disk that holds the session's text, or a change of
+    another session it has still to take, is not reported."""
+    group = session.group
+    changed = []
+    for path in session.edit.changed_on_disk(watched_files(session)):
+        if session.edit.accept_disk(path):
+            continue
+        if path in group.pending:
+            try:
+                stat = path.stat()
+                state = (stat.st_mtime_ns, stat.st_size)
+                if group.quiet.get(path) == state or read_text(path) == group.pending[path][1]:
+                    group.quiet[path] = state
+                    continue
+            except OSError:
+                pass
+        changed.append(path)
     if changed != session.changed_on_disk:
         session.changed_on_disk = changed
         return True
@@ -697,6 +821,7 @@ def find_text(session: ObjectSession, path: Path):
 
 def show_text(session: ObjectSession, path: Path):
     """Shows the file as the session has it, unsaved edits included, in a Blender text."""
+    ensure_current(session.group)
     path = Path(path).absolute()
     text = find_text(session, path) or bpy.data.texts.new(path.name)
     content = session.edit.text_of(path).replace("\r\n", "\n")

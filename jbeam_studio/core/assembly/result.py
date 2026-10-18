@@ -70,6 +70,8 @@ class AssembledVehicle:
     extras: list[ExtraEntry] = field(default_factory=list)
     external_nodes: dict[str, NodeEntry] = field(default_factory=dict)
     """Nodes of other parts that a single imported part references; shown read-only."""
+    dropped: list[tuple[str, dict]] = field(default_factory=list)
+    """Rows the game discards because they reference entries that do not exist, with their sections."""
     parts: dict[str, PartDef] = field(default_factory=dict)
     """The parts that make up the vehicle, parents before children."""
     index: PartIndex | None = None

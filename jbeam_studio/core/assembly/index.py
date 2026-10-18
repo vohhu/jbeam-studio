@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
@@ -68,7 +69,9 @@ class PartIndex:
 
     def jbeam_files(self, directory: Path) -> list[Path]:
         if self.closed:
-            found = [p for p in self.overrides if p.suffix.lower() == ".jbeam" and p.is_relative_to(directory)]
+            inside = os.path.join(os.path.normcase(str(directory)), "")
+            found = [p for p in self.overrides
+                     if (name := os.path.normcase(str(p))).endswith(".jbeam") and name.startswith(inside)]
         else:
             found = list(directory.rglob("*.jbeam")) if directory.is_dir() else []
         return sorted(found, key=lambda p: str(p).lower())

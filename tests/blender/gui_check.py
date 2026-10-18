@@ -61,7 +61,8 @@ def show_panel(area, name: str) -> None:
     for cls in reversed(panels.CLASSES):
         bpy.utils.unregister_class(cls)
     for cls in panels.CLASSES:
-        cls.bl_category = "Item"
+        if cls.bl_region_type == "UI":
+            cls.bl_category = "Item"
         if cls.bl_idname == "JBS_PT_diagnostics":
             cls.bl_options = set()
         bpy.utils.register_class(cls)
@@ -271,7 +272,7 @@ def steps():
             bpy.utils.unregister_class(cls)
         operators = sys.modules[name + ".ui.operators"]
         hydro = next(e for e in session.edit.vehicle.extras if e.section == "hydros")
-        bpy.context.window_manager.jbs_view.expanded_extra = operators.extra_key(hydro)
+        sys.modules[name + ".ui.view"].panel_state().expanded_extra = operators.extra_key(hydro)
         opened = type("JBS_PT_extras_open", (panels.JBS_PT_extras,),
                       {"bl_idname": "JBS_PT_extras_open", "bl_options": set()})
         bpy.utils.register_class(opened)
@@ -296,7 +297,7 @@ def steps():
         bpy.ops.object.mode_set("EXEC_DEFAULT", True, mode="OBJECT")
     yield 0.5
 
-    view_settings = bpy.context.window_manager.jbs_view
+    view_settings = sys.modules[name + ".ui.view"].settings()
     view_settings.labels = "ALL"
     window_region = next(r for r in area.regions if r.type == "WINDOW")
     with bpy.context.temp_override(**{**override, "region": window_region}):
@@ -339,13 +340,13 @@ def steps():
         bm.verts[0].select = True
         bm.select_history.add(bm.verts[0])
         bmesh.update_edit_mesh(pickup.data)
-        bpy.context.window_manager.jbs_view.labels = "ALL"
+        sys.modules[name + ".ui.view"].settings().labels = "ALL"
         with bpy.context.temp_override(**override, active_object=pickup, object=pickup):
             bpy.ops.view3d.view_all()
         results["steps"].append(("pickup", len(pickup.data.vertices), len(pickup.data.edges),
                                  sum(v.select for v in bm.verts),
                                  len(sessions.selected_node_ids(pickup, sessions.session_of(pickup))),
-                                 bpy.context.window_manager.jbs_view.labels))
+                                 sys.modules[name + ".ui.view"].settings().labels))
     else:
         with bpy.context.temp_override(**override, active_object=obj, object=obj):
             bpy.ops.object.mode_set("EXEC_DEFAULT", True, mode="EDIT")
@@ -359,14 +360,14 @@ def steps():
             bpy.ops.screen.screenshot(filepath=str(SCREENSHOT))
         results["steps"].append(("screenshot", str(SCREENSHOT)))
     yield 0.2
-    view_settings = bpy.context.window_manager.jbs_view
+    view_settings = sys.modules[name + ".ui.view"].settings()
     shading = area.spaces.active.shading
     for label, change in (("through", lambda: setattr(view_settings, "through_faces", True)),
                           ("xray", lambda: (setattr(view_settings, "through_faces", False),
                                             setattr(shading, "show_xray", True))),
                           ("gradient", lambda: (setattr(shading, "show_xray", False),
                                                 setattr(view_settings, "beam_color_by", "beamSpring"),
-                                                setattr(view_settings, "group_colors", True),
+                                                setattr(view_settings, "node_colors", True),
                                                 setattr(view_settings, "node_color_by", "nodeWeight")))):
         change()
         for region in area.regions:
@@ -375,8 +376,48 @@ def steps():
         if SCREENSHOT is not None:
             with bpy.context.temp_override(**override):
                 bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + f"_{label}.png")))
-    view_settings.beam_color_by, view_settings.group_colors = "TYPE", False
+    view_settings.beam_color_by, view_settings.node_colors = "TYPE", False
     yield 0.2
+    view_module = sys.modules[name + ".ui.view"]
+    for label, change in (("features", lambda: (setattr(view_settings, "normal_beams", True),
+                                                setattr(view_settings, "node_colors", True))),
+                          ("dimmed", lambda: setattr(view_settings, "scope", "ACTIVE"))):
+        change()
+        for region in area.regions:
+            region.tag_redraw()
+        yield 1.0
+        if SCREENSHOT is not None:
+            with bpy.context.temp_override(**override):
+                bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + f"_{label}.png")))
+    results["steps"].append(("display", view_settings.scope, view_settings.normal_beams))
+    view_module.reset(view_settings)
+    results["steps"].append(("display reset", view_settings.scope, view_settings.normal_beams))
+    if SCREENSHOT is not None:
+        panels = sys.modules[name + ".ui.panels"]
+        sidebar = [c for c in panels.CLASSES if c.bl_region_type == "UI" and c.bl_idname != "JBS_PT_main"]
+        shown = [c for c in sidebar if c.bl_idname.startswith("JBS_PT_display")]
+        options = {c: c.bl_options for c in shown}
+        for cls in reversed(sidebar):
+            bpy.utils.unregister_class(cls)
+        for cls in shown:
+            cls.bl_options = set()
+            bpy.utils.register_class(cls)
+        for region in area.regions:
+            region.tag_redraw()
+        yield 0.8
+        with bpy.context.temp_override(**override):
+            bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + "_display.png")))
+        for cls in reversed(shown):
+            bpy.utils.unregister_class(cls)
+            cls.bl_options = options[cls]
+        for cls in sidebar:
+            bpy.utils.register_class(cls)
+        window_region = next(r for r in area.regions if r.type == "WINDOW")
+        with bpy.context.temp_override(**{**override, "region": window_region}):
+            bpy.ops.wm.call_panel(name="JBS_PT_overlay", keep_open=True)
+        yield 0.8
+        with bpy.context.temp_override(**override):
+            bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + "_popover.png")))
 
     big = override["area"]
     big.type = "TEXT_EDITOR"

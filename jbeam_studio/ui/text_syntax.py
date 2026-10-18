@@ -26,6 +26,7 @@ from ..core.sjson import parse
 from ..core.sjson.tokens import (
     COMMENT, EXPRESSION, KEY, LITERAL, NUMBER, PART, SECTION, STRING, VARIABLE, tokens_by_line,
 )
+from . import view
 from .text_highlight import path_key
 
 COLORS = {
@@ -137,7 +138,7 @@ def draw_footer() -> None:
         context = bpy.context
         space = context.space_data
         text = space.text if space is not None else None
-        if text is None or not is_jbeam(text) or not context.window_manager.jbs_view.text_problems:
+        if text is None or not is_jbeam(text) or not view.settings(context).text_problems:
             return
         cached = _analyses.get(text.name)
         if cached is None:
@@ -285,9 +286,9 @@ def _draw() -> None:
     text = space.text if space is not None else None
     if text is None or not is_jbeam(text):
         return
-    view = context.window_manager.jbs_view
-    colours = view.text_syntax and space.show_syntax_highlight
-    if not colours and not view.text_problems:
+    display = view.settings(context)
+    colours = display.text_syntax and space.show_syntax_highlight
+    if not colours and not display.text_problems:
         return
     region = context.region
     content = text.as_string()
@@ -312,7 +313,7 @@ def _draw() -> None:
     cursor_line = text.select_end_line_index
     clear: dict[tuple, list] = {}
     glyphs: dict[tuple, list] = {}
-    problems = problems_of(text, analysis) if view.text_problems else {}
+    problems = problems_of(text, analysis) if display.text_problems else {}
     underline: dict[tuple, list] = {}
     gutter: dict[tuple, list] = {}
     messages = []

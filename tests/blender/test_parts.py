@@ -109,15 +109,42 @@ def test_parts_of_one_file_imported_on_their_own_take_each_other_s_edits(car):
     bmesh.update_edit_mesh(objects["car_door_L_stock"].data)
     sessions.apply_live(objects["car_door_L_stock"], stock)
     moved = stock.edit.text_of(path)
-    assert '["d1l", 0.650,' in moved and sport.edit.text_of(path) == moved
-    assert sport.edit.dirty_files() == [] and not sessions.check_disk(sport)
+    assert '["d1l", 0.650,' in moved and sport.group.pending[path.absolute()][1] == moved
+    assert not sessions.check_disk(sport)
+    assert sessions.ensure_current(sport.group) and sport.edit.text_of(path) == moved
+    assert sport.edit.dirty_files() == [] and not sport.group.pending
     assert mesh_io.mesh_rev(objects["car_door_L_sport"]) == sport.link.rev
     bm = bmesh.from_edit_mesh(objects["car_door_L_stock"].data)
     vertex(stock, bm, "d1l").co = (0.6, 0.0, 0.5)
     bmesh.update_edit_mesh(objects["car_door_L_stock"].data)
     mesh_io.set_rev(objects["car_door_L_stock"], first)
     handlers.on_undo_post()
+    sessions.ensure_current(sport.group)
     assert '["d1l", 0.6,' in stock.edit.text_of(path) and sport.edit.text_of(path) == stock.edit.text_of(path)
+
+
+def test_a_session_takes_the_changes_of_others_before_it_edits(car):
+    path = car / "doors.jbeam"
+    objects = {}
+    for part in ("car_door_L_stock", "car_door_L_sport"):
+        assert bpy.ops.jbs.import_jbeam(filepath=str(path), part_name=part) == {"FINISHED"}
+        objects[part] = bpy.context.active_object
+    stock, sport = (sessions.session_of(objects[p]) for p in ("car_door_L_stock", "car_door_L_sport"))
+    edit_all(objects["car_door_L_stock"])
+    bm = bmesh.from_edit_mesh(objects["car_door_L_stock"].data)
+    vertex(stock, bm, "d1l").co = (0.65, 0.0, 0.5)
+    bmesh.update_edit_mesh(objects["car_door_L_stock"].data)
+    sessions.apply_live(objects["car_door_L_stock"], stock)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    edit_all(objects["car_door_L_sport"])
+    bm = bmesh.from_edit_mesh(objects["car_door_L_sport"].data)
+    vertex(sport, bm, "d2l").co = (0.75, 0.0, 0.5)
+    bmesh.update_edit_mesh(objects["car_door_L_sport"].data)
+    sessions.apply_live(objects["car_door_L_sport"], sport)
+    text = sport.edit.text_of(path)
+    assert '["d1l", 0.650,' in text and '["d2l", 0.750,' in text
+    sessions.ensure_current(stock.group)
+    assert stock.edit.text_of(path) == text
 
 
 def test_a_part_made_a_plain_mesh_leaves_the_other_parts_linked(car):
