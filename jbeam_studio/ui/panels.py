@@ -130,14 +130,6 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
                     layout.label(text=tr(text).format(count), icon="INFO")
         for note in list(session.edit.notes)[:3]:
             wrapped(layout, note.message, icon="INFO")
-        conflicts = sessions.scene_conflicts(session)
-        if conflicts:
-            alert = layout.box()
-            alert.alert = True
-            parts = sorted({part for names in conflicts.values() for part in names})
-            shown = ", ".join(sorted(conflicts)[:8]) + (" \u2026" if len(conflicts) > 8 else "")
-            wrapped(alert, tr("Other parts in the scene ({parts}) already have nodes of this part: {nodes}").format(
-                parts=", ".join(parts[:3]), nodes=shown), width=38, icon="ERROR")
 
         row = layout.row(align=True)
         row.operator("jbs.apply_mesh", icon="CHECKMARK")

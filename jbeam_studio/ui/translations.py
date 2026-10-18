@@ -527,8 +527,6 @@ RUSSIAN = {
     "Without a group": "Без группы",
     "Node groups": "Группы нод",
     "Parts": "Части",
-    "Other parts in the scene ({parts}) already have nodes of this part: {nodes}":
-        "Ноды этой части уже есть в других частях сцены ({parts}): {nodes}",
     "Flags": "Флаги",
     "As the game shows nodes: fixed, selfCollision and collision false in their colours, the others in the node colour":
         "Как ноды показывает игра: fixed, selfCollision и collision false своими цветами, остальные — цветом нод",

@@ -4,6 +4,10 @@
 
 Versions 0.1–0.12 were released before this repository was created.
 
+## 0.18.1
+
+- The warning about nodes that other imported parts also have is gone, with its red marks: it also marked the nodes of parts that are never fitted together, such as variants of one wing.
+
 ## 0.18.0
 
 - The first full release, no longer a preview, with the repository public.

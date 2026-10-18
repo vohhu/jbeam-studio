@@ -96,26 +96,3 @@ def test_the_colours_are_those_of_the_game_s_debug_view():
     assert overlay.node_flag_color({"fixed": True, "selfCollision": True}, style) == style.node_flags[0][1]
     assert overlay.node_flag_color({"collision": False}, style) == style.node_flags[2][1]
     assert overlay.node_flag_color({"collision": True}, style) == style.node_color
-
-
-DOORS = """{
-"door_FL": {"information": {"name": "Front"}, "slotType": "door_FL",
-    "nodes": [["id", "posX", "posY", "posZ"], ["d1l", 0.6, 0, 0.5], ["d2l", 0.6, 0.5, 0.5]]},
-"door_FL_alt": {"information": {"name": "Front, other"}, "slotType": "door_FL",
-    "nodes": [["id", "posX", "posY", "posZ"], ["d1l", 0.6, 0, 0.6], ["d2l", 0.6, 0.5, 0.6]]},
-"door_RL": {"information": {"name": "Rear"}, "slotType": "door_RL",
-    "nodes": [["id", "posX", "posY", "posZ"], ["d2l", 0.6, 1.0, 0.5], ["d3l", 0.6, 1.5, 0.5]]},
-}"""
-
-
-def test_nodes_that_parts_which_can_be_fitted_together_both_define_are_reported(tmp_path):
-    import bpy
-    from jbeam_studio.blender import sessions
-    folder = tmp_path / "vehicles" / "two_doors"
-    folder.mkdir(parents=True)
-    (folder / "doors.jbeam").write_text(DOORS, encoding="utf-8")
-    assert bpy.ops.jbs.import_jbeam_part(paths=str(folder / "doors.jbeam"), all_parts=True) == {"FINISHED"}
-    found = {sessions.session_of(o).scope: sessions.scene_conflicts(sessions.session_of(o))
-             for o in bpy.data.objects if sessions.session_of(o) is not None}
-    assert found == {"door_FL": {"d2l": ["door_RL"]}, "door_FL_alt": {"d2l": ["door_RL"]},
-                     "door_RL": {"d2l": ["door_FL", "door_FL_alt"]}}

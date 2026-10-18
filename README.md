@@ -39,7 +39,7 @@ JBeam Studio imports a whole vehicle from its part config (`.pc`) or single part
 | **Game colours** | Beams by type, nodes by flags, hydros, torsion bars and rails drawn with the colours of the game's debug view, plus gradients by `beamSpring`, `beamDamp`, `beamDeform` and `beamStrength`, and break and deform groups. |
 | **Smart helpers** | New nodes are named after their neighbours (`e3l` gives `e5l`), mirroring across X, Y or Z with the side letters swapped, property editing for many rows at once, node groups, hydros, torsion bars, rails and slide nodes. |
 | **Text editor** | JBeam syntax colours, problems underlined as you type, the rows of the selection highlighted, and clicking a row selects it in the viewport. |
-| **Diagnostics** | Missing nodes, repeated beams, flat faces, leaking modifiers, nodes defined by two parts: listed, marked in the viewport, and fixed with one click. |
+| **Diagnostics** | Missing nodes, repeated beams, flat faces, leaking modifiers: listed, marked in the viewport, and fixed with one click. |
 | **Fast** | A whole vehicle imported part by part (hundreds of objects) stays smooth: drawing is kept on the GPU and the parts share edits lazily. |
 | **Two languages** | The interface follows Blender's language: English or Russian. |
 
@@ -109,7 +109,6 @@ Blender 4.5 LTS or 5.2 LTS.
 ### New nodes and rows
 
 - A new node is named after the node it was extruded or copied from, or the node it is joined to: the same prefix, the next free number of that part and the side letter of its position. Extruding `e3l` gives `e5l`, `e5r` on the other side, `e5` at the centre. Nodes without neighbours get the *New node prefix* and a number.
-- If an imported part already uses that name, the panel says so and the node is marked in red (see [many parts at once](#many-parts-at-once)).
 - *Editing › Where new rows go*:
   - **End of table** (default): after the resets at the end of the section;
   - **Next to the source**: an extruded node after its source node, with its group and values; its beam after the beams of that node; a copied beam after the original;
@@ -255,9 +254,7 @@ With *Display › Selection and Problems › Problems*, repeated beams, flat tri
 
 - Parts imported on their own from the same files share their edits: the other parts take an edit when editing pauses (those that show what changed) or before they are edited themselves, joining it line by line with their own edits.
 - A whole vehicle imported part by part stays smooth: moving a node with Auto takes a fraction of a second, and moving the view only draws what is kept on the GPU.
-- Parts imported on their own only see their own nodes and the nodes they use, so a new node can get a name that another imported part already has, for example `d16l` of the front door when the rear door uses `d16l`. The panel then says which nodes and parts, and the nodes are marked in red. Parts of the same slot type, such as two variants of one door, are alternatives and do not count.
-
-  ![A node of the rear door named like a node of the front door: the warning in the panel and the node in red](docs/images/conflict.png)
+- A part imported on its own only sees its own nodes and the nodes it uses, so new nodes are named within that part; check their names against the other parts you import.
 
 ## Troubleshooting
 

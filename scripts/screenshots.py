@@ -237,14 +237,10 @@ def steps():
     sidebar(False)
 
     if SET == "parts":
-        doors = VEHICLES / "etk800"
-        front = next(doors.rglob("etk800_doors_F.jbeam"))
-        rear = next(doors.rglob("etk800_doors_R.jbeam"))
+        front = next((VEHICLES / "etk800").rglob("etk800_doors_F.jbeam"))
         with bpy.context.temp_override(**override()):
             bpy.ops.jbs.import_jbeam("EXEC_DEFAULT", filepath=str(front), part_name="etk800_door_FL")
-            bpy.ops.jbs.import_jbeam("EXEC_DEFAULT", filepath=str(rear), part_name="etk800_door_RL")
         fl = next(o for o in bpy.data.objects if o.jbs.part_name == "etk800_door_FL")
-        rl = next(o for o in bpy.data.objects if o.jbs.part_name == "etk800_door_RL")
         display.node_colors = True
         frame([fl], rotation=(80, 0, 90), zoom=-0.2)
         with bpy.context.temp_override(**override(), active_object=fl, object=fl):
@@ -260,19 +256,6 @@ def steps():
         redraw()
         yield 1.5
         shot("part-ghosts")
-        fl_nodes = sorted(sessions.session_of(fl).edit.vehicle.nodes)
-        rl_session = sessions.session_of(rl)
-        rl_node = sorted(rl_session.edit.vehicle.nodes)[0]
-        bpy.context.view_layer.objects.active = rl
-        with bpy.context.temp_override(**override(), active_object=rl, object=rl):
-            bpy.ops.jbs.rename_node("EXEC_DEFAULT", old_id=rl_node, new_id=fl_nodes[0])
-        log["notes"].append(f"renamed {rl_node} of the rear door to {fl_nodes[0]}")
-        frame([fl, rl], rotation=(80, 0, 90), zoom=0.05)
-        bpy.context.view_layer.objects.active = fl
-        display.labels = "ALL"
-        redraw()
-        yield 1.5
-        shot("conflict")
         return
 
     with bpy.context.temp_override(**override()):

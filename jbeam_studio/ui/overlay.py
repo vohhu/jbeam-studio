@@ -418,17 +418,6 @@ def _rail_colors(session, style: Style) -> dict[str, tuple]:
     return _kept((session.key, session.link.rev, "rails", style.rail_mode, style.rail_color), make)
 
 
-_scene = [()]
-"""The scene key of the current redraw."""
-
-
-def _conflicts(session) -> frozenset:
-    """Nodes of the session's part that other parts in the scene define too."""
-    key = _scene[0]
-    return _kept((session.key, session.link.rev, "conflicts", key),
-                 lambda: frozenset(sessions.scene_conflicts(session, key)))
-
-
 def _problems(session):
     """Problems of the session's vehicle, with the uids of the problem beams."""
     def make():
@@ -493,12 +482,6 @@ def _content(obj, session, geometry: Geometry, style: Style) -> Content:
                     _add(lines, extra.section, color, np.array(segments, dtype=np.float32))
     if style.problems:
         problems, uids = _problems(session)
-        conflicts = _conflicts(session)
-        if conflicts:
-            where = where if where is not None else _where(names, world)
-            spots = [where[i] for i in conflicts if i in where]
-            if spots:
-                _add(points, "problem", style.problem_color, np.array(spots, dtype=np.float32))
         if problems:
             if uids and len(edges):
                 mask = np.fromiter((uid in uids for uid in geometry.edge_uids.tolist()), dtype=bool, count=len(edges))
@@ -599,7 +582,7 @@ def _object_key(obj, session, style: Style) -> tuple:
     mesh = obj.data
     return (session.key, session.part_name, session.link.rev, _object_changes.get(obj.name, 0),
             len(mesh.vertices), len(mesh.edges), tuple(obj.matrix_world.col[3]), tuple(obj.matrix_world.col[0]),
-            obj.jbs.all_nodes, style.content, _conflicts(session) if style.problems else None)
+            obj.jbs.all_nodes, style.content)
 
 
 def _static(context, style: Style) -> Frame:
@@ -607,11 +590,10 @@ def _static(context, style: Style) -> Frame:
     a session or the settings changed."""
     global _frame
     active = context.view_layer.objects.active
-    scene = sessions.scene_key()
-    key = (_generation, style.content, style.scope, style.dim_others, active.name if active else "", scene)
+    key = (_generation, style.content, style.scope, style.dim_others, active.name if active else "",
+           sessions.scene_key())
     if key == _frame.key:
         return _frame
-    _scene[0] = scene
     frame = Frame(key)
     for obj, session, dim in _shown_objects(context, style):
         if obj.mode == "EDIT":
@@ -1028,12 +1010,11 @@ def legend_rows(session, style: Style) -> list[tuple[tuple | None, str]]:
                 rows += _gradient_rows(style.node_by, _values(session, "nodes", style.node_by)[1], style)
         if style.problems:
             problems = _problems(session)[0]
-            count = len(problems.beams) + len(problems.faces) + len(problems.nodes) + len(conflicts)
+            count = len(problems.beams) + len(problems.faces) + len(problems.nodes)
             if count:
                 rows.append((style.problem_color, f"{tr('Problems')}  {count}"))
         return rows
-    conflicts = _conflicts(session) if style.problems else frozenset()
-    return _kept((session.key, session.link.rev, "legend", style.content, conflicts), make)
+    return _kept((session.key, session.link.rev, "legend", style.content), make)
 
 
 def draw_pixel() -> None:
