@@ -1,0 +1,15 @@
+name: Idea · Идея
+description: Something the add-on could do · Что аддон мог бы делать
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to do · Что вы хотите сделать
+      description: The task, not the solution · Задача, а не решение
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work · Как это могло бы работать

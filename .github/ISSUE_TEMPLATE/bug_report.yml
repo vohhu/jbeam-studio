@@ -1,0 +1,31 @@
+name: Bug report · Ошибка
+description: Something does not work as it should · Что-то работает не так, как должно
+labels: [bug]
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions · Версии
+      description: Blender and JBeam Studio · Blender и JBeam Studio
+      placeholder: Blender 5.2.2, JBeam Studio 0.17.0
+    validations:
+      required: true
+  - type: input
+    id: vehicle
+    attributes:
+      label: Vehicle or part · Машина или часть
+      placeholder: etk800/856_ttsport_DCT.pc, etk800_door_FL
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did · Что вы делали
+      description: Step by step · По шагам
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened and what you expected · Что произошло и что ожидалось
+      description: Screenshots and the error from Blender's console help · Помогут скриншоты и ошибка из консоли Blender
+    validations:
+      required: true

@@ -19,7 +19,7 @@ from .operators import (
     EXTRA_ICONS, FIX_GROUPS, entries_of_kind, extra_key, extra_label, extra_properties, fixable, kind_of_select_mode,
     saved_time, summary, tr, value_text,
 )
-from .view import BEAM_TYPES, CATEGORIES, EXTRA_SECTIONS
+from .view import BEAM_TYPES, CATEGORIES, NODE_FLAGS
 
 HIDDEN_KEYS = {"slotType", "partName", "partOrigin", "partPath", "skinName", "globalSkin", "name",
                "posX", "posY", "posZ", "id1:", "id2:", "id3:", "id4:"}
@@ -130,6 +130,15 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
                     layout.label(text=tr(text).format(count), icon="INFO")
         for note in list(session.edit.notes)[:3]:
             wrapped(layout, note.message, icon="INFO")
+        conflicts = sessions.scene_conflicts(session)
+        if conflicts:
+            alert = layout.box()
+            alert.alert = True
+            parts = sorted({part for names in conflicts.values() for part in names})
+            shown = ", ".join(sorted(conflicts)[:8]) + (" \u2026" if len(conflicts) > 8 else "")
+            wrapped(alert, tr("{count} nodes of this part already exist in other parts in the scene ({parts}): "
+                              "{nodes}").format(count=len(conflicts), parts=", ".join(parts[:3]), nodes=shown),
+                    icon="ERROR")
 
         row = layout.row(align=True)
         row.operator("jbs.apply_mesh", icon="CHECKMARK")
@@ -534,7 +543,13 @@ def draw_display_nodes(layout, display) -> None:
     column.prop(display, "node_color_by", text="Colour by")
     if display.node_color_by == "nodeWeight":
         _gradient(column, display)
-    column.prop(display, "node_color", text="Colour" if display.node_color_by == "PLAIN" else "Without a group")
+    if display.node_color_by == "FLAGS":
+        flags = column.column(align=True)
+        for _flag, name in NODE_FLAGS:
+            flags.prop(display, name)
+        flags.prop(display, "node_color", text="Other nodes")
+    else:
+        column.prop(display, "node_color", text="Colour" if display.node_color_by == "PLAIN" else "Without a group")
     column.prop(display, "node_size")
     row = layout.row(heading=tr("Other parts"))
     row.prop(display, "ghosts", text="")
@@ -548,9 +563,14 @@ def draw_display_extras(layout, display) -> None:
     layout.active = display.extras
     layout.row(align=True).prop(display, "extra_kinds", expand=True)
     layout = _split(layout)
+    layout.prop(display, "color_hydros")
     column = layout.column(align=True)
-    for _section, name, _title in EXTRA_SECTIONS:
+    for name in ("color_torsionbars", "color_torsionbars_second", "color_torsion_axis", "color_torsion_anisotropic",
+                 "color_torsion_anisotropic_second"):
         column.prop(display, name)
+    layout.prop(display, "rail_colors")
+    if display.rail_colors == "ONE":
+        layout.prop(display, "color_rails")
     layout.prop(display, "extra_width")
 
 

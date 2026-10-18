@@ -26,18 +26,14 @@ from mathutils.bvhtree import BVHTree
 
 from ..blender import mesh_io, sessions
 from ..core.display import CATEGORY_KEYS, category, find_problems
+from ..core.lua import truthy
 from ..core.physics import mass, value_of
-from .view import BEAM_TYPES, EXTRA_SECTIONS, settings
+from .view import BEAM_TYPES, EXTRA_SECTIONS, NODE_FLAGS, game, settings
 
-BEAM_COLORS = {
-    "|SUPPORT": (1.0, 0.62, 0.15),
-    "|BOUNDED": (0.25, 0.55, 1.0),
-    "|ANISOTROPIC": (0.75, 0.4, 1.0),
-    "|LBEAM": (0.35, 0.9, 0.35),
-    "|PRESSURED": (0.2, 0.9, 0.9),
-}
-"""Default colours of the beam types."""
-UNKNOWN_BEAM_COLOR = (1.0, 0.25, 0.25)
+BEAM_COLORS = {"|SUPPORT": game(223, 0, 223), "|BOUNDED": game(255, 255, 0), "|ANISOTROPIC": game(255, 135, 63),
+               "|LBEAM": game(92, 92, 92), "|PRESSURED": game(0, 255, 255)}
+"""Colours of the beam types in the game's debug view."""
+UNKNOWN_BEAM_COLOR = game(255, 0, 0)
 """Beam types the game does not know, such as "| BOUNDED"."""
 EXTRA_KIND = {"hydros": "hydros", "torsionbars": "torsionbars", "torsionHydros": "torsionbars",
               "rails": "rails", "slidenodes": "rails"}
@@ -46,13 +42,14 @@ EXTRA_TITLES = {section: title for section, _, title in EXTRA_SECTIONS}
 GRADIENT = ((0.15, 0.35, 1.0), (0.1, 0.8, 0.95), (0.3, 0.9, 0.3), (1.0, 0.85, 0.2), (1.0, 0.25, 0.2))
 """Colours of the rainbow gradient from low to high values."""
 PALETTES = {
+    "BEAMNG": ((1.0, 1.0, 1.0), (1.0, 0.0, 0.0)),
     "RAINBOW": GRADIENT,
     "COOLWARM": ((0.23, 0.3, 0.75), (0.55, 0.69, 0.99), (0.87, 0.87, 0.87), (0.96, 0.6, 0.48), (0.7, 0.02, 0.15)),
     "VIRIDIS": ((0.27, 0.0, 0.33), (0.23, 0.32, 0.55), (0.13, 0.57, 0.55), (0.37, 0.79, 0.38), (0.99, 0.91, 0.14)),
     "HEAT": ((0.3, 0.0, 0.0), (0.75, 0.1, 0.0), (1.0, 0.5, 0.0), (1.0, 0.85, 0.3), (1.0, 1.0, 0.9)),
 }
 GRADIENT_STEPS = 16
-INFINITE_COLOR = (0.8, 0.45, 1.0)
+INFINITE_COLOR = game(255, 0, 255)
 """Values such as FLT_MAX, which do not fit a gradient."""
 LEGEND_ROWS = 12
 MAX_LABELS = 4000
@@ -60,7 +57,7 @@ LINE_LIFT = 0.002
 """How far what is drawn comes towards the viewer, as a part of its distance, so the faces it lies on do not hide
 it."""
 LABEL_LIFT = 0.015
-LINE_LAYERS = ("beam", "hydros", "torsionbars", "torsionHydros", "rails", "problem", "selection")
+LINE_LAYERS = ("beam", "hydros", "torsionbars", "torsion_axis", "rails", "problem", "selection")
 POINT_LAYERS = ("node", "ghost", "slidenodes", "problem", "selection")
 """What is drawn, from bottom to top."""
 _handles: list = []
@@ -81,6 +78,16 @@ def group_color(name: str) -> tuple:
     """A colour of its own for each group name, the same in every session."""
     value = int(hashlib.md5(name.encode("utf-8")).hexdigest()[:6], 16)
     return colorsys.hsv_to_rgb((value % 360) / 360.0, 0.65, 1.0)
+
+
+def jet_color(x: float) -> tuple:
+    """The game's jetColor: blue, cyan, green, yellow, red for x from 0 to 1."""
+    return (min(1.0, max(0.0, 4 * x - 2)), min(1.0, max(0.0, 2 - abs(4 * x - 2))), min(1.0, max(0.0, 2 - 4 * x)))
+
+
+def contrast_color(index: int) -> tuple:
+    """The game's colour for the index-th break or deform group (getContrastColor)."""
+    return jet_color((index % 17) / 16)
 
 
 def gradient_color(t: float, stops=GRADIENT) -> tuple:
@@ -139,7 +146,7 @@ class Scale:
 
 def _kept(key, make):
     if key not in _cache:
-        if len(_cache) > 2048:
+        if len(_cache) > 8192:
             _cache.clear()
         _cache[key] = make()
     return _cache[key]
@@ -180,10 +187,15 @@ class Style:
             self.stops = PALETTES[display.palette]
         self.infinite = _color(display.infinite_color)
         self.nodes, self.node_by, self.node_color = display.node_colors, display.node_color_by, _color(display.node_color)
+        self.node_flags = tuple((flag, _color(getattr(display, name))) for flag, name in NODE_FLAGS)
         self.node_size = display.node_size
         self.ghosts, self.ghost_color, self.ghost_size = display.ghosts, _color(display.ghost_color), display.ghost_size
         self.extras, self.kinds = display.extras, frozenset(display.extra_kinds)
         self.extra_colors = {section: _color(getattr(display, name)) for section, name, _ in EXTRA_SECTIONS}
+        self.torsion = tuple(_color(getattr(display, name)) for name in (
+            "color_torsionbars", "color_torsionbars_second", "color_torsion_axis", "color_torsion_anisotropic",
+            "color_torsion_anisotropic_second"))
+        self.rail_mode, self.rail_color = display.rail_colors, _color(display.color_rails)
         self.selection, self.selection_color = display.selection, _color(display.selection_color)
         self.problems, self.problem_color = display.problems, _color(display.problem_color)
         self.labels, self.label_size = display.labels, display.label_size
@@ -194,8 +206,9 @@ class Style:
         self.center_label, self.center_size = display.center_label, display.center_size
         self.content = (self.beams, self.beam_by, self.normal, self.normal_color, self.unknown,
                         tuple(self.type_colors.values()), self.stops, self.infinite, self.nodes, self.node_by,
-                        self.node_color, self.ghosts, self.ghost_color, self.extras, self.kinds,
-                        tuple(self.extra_colors.values()), self.problems, self.problem_color)
+                        self.node_color, self.node_flags, self.ghosts, self.ghost_color, self.extras, self.kinds,
+                        tuple(self.extra_colors.values()), self.torsion, self.rail_mode, self.rail_color,
+                        self.problems, self.problem_color)
         """What decides the colours of what is drawn, as opposed to how it is drawn."""
 
     def line_width(self, layer: str) -> float:
@@ -203,7 +216,7 @@ class Style:
             return self.width
         if layer in ("problem", "selection"):
             return self.width + 2.0
-        return self.extra_width * (1.3 if layer == "rails" else 1.0)
+        return self.extra_width * {"rails": 1.3, "torsion_axis": 2.0}.get(layer, 1.0)
 
     def point_size(self, layer: str) -> float:
         return {"node": self.node_size, "ghost": self.ghost_size, "slidenodes": self.node_size + 4,
@@ -341,10 +354,11 @@ def _beam_colors(session, style: Style) -> dict:
                 found[uid] = beam_color(beam_type, style.type_colors, style.unknown) or normal
             return found
         if style.beam_by in CATEGORY_KEYS or style.beam_by == "PART":
+            colors = _category_colors(session, "beams", style.beam_by)
             found = {}
             for uid, group in beams.items():
                 name = category(vehicle.beams[group.indices[0]], style.beam_by)
-                found[uid] = group_color(name) if name is not None else normal
+                found[uid] = colors[name] if name is not None else normal
             return found
         values, scale = _values(session, "beams", style.beam_by)
         return {uid: scale.color(value, style.stops, style.infinite) or normal for uid, value in values.items()}
@@ -358,13 +372,61 @@ def _node_colors(session, style: Style) -> dict:
         nodes = {**vehicle.external_nodes, **vehicle.nodes}
         if style.node_by == "PLAIN":
             return dict.fromkeys(nodes, style.node_color)
+        if style.node_by == "FLAGS":
+            return {node_id: node_flag_color(node.props, style) for node_id, node in nodes.items()}
         if style.node_by in ("GROUP", "PART"):
-            return {node_id: group_color(name) if (name := category(node, style.node_by)) else style.node_color
+            colors = _category_colors(session, "nodes", style.node_by)
+            return {node_id: colors[name] if (name := category(node, style.node_by)) else style.node_color
                     for node_id, node in nodes.items()}
         values, scale = _values(session, "nodes", style.node_by)
         return {node_id: scale.color(values.get(node_id), style.stops, style.infinite) or style.node_color
                 for node_id in nodes}
     return _kept((session.key, session.link.rev, "node colours", style.content), make)
+
+
+def node_flag_color(props: dict, style: Style) -> tuple:
+    """The colour the game gives a node: fixed, then selfCollision, then collision false, else the node colour."""
+    for flag, color in style.node_flags:
+        value = props.get(flag)
+        if value is False if flag == "collision" else truthy(value):
+            return color
+    return style.node_color
+
+
+def _category_colors(session, kind: str, by: str) -> dict[str, tuple]:
+    """A colour for each break group, deform group, node group or part of the session's vehicle, in the order they
+    first appear, as the game colours break and deform groups."""
+    def make():
+        vehicle = session.edit.vehicle
+        entries = vehicle.beams if kind == "beams" else [*vehicle.nodes.values(), *vehicle.external_nodes.values()]
+        order: dict[str, tuple] = {}
+        for entry in entries:
+            name = category(entry, by)
+            if name is not None and name not in order:
+                order[name] = contrast_color(len(order))
+        return order
+    return _kept((session.key, session.link.rev, "categories", kind, by), make)
+
+
+def _rail_colors(session, style: Style) -> dict[str, tuple]:
+    """The colour of each rail by name: one for each, as in the game, or the rail colour."""
+    def make():
+        rails = [e.name for e in session.edit.vehicle.extras if e.section == "rails"]
+        if style.rail_mode == "ONE":
+            return dict.fromkeys(rails, style.rail_color)
+        return {name: jet_color(i / (len(rails) + 1)) for i, name in enumerate(rails)}
+    return _kept((session.key, session.link.rev, "rails", style.rail_mode, style.rail_color), make)
+
+
+_scene = [()]
+"""The scene key of the current redraw."""
+
+
+def _conflicts(session) -> frozenset:
+    """Nodes of the session's part that other parts in the scene define too."""
+    key = _scene[0]
+    return _kept((session.key, session.link.rev, "conflicts", key),
+                 lambda: frozenset(sessions.scene_conflicts(session, key)))
 
 
 def _problems(session):
@@ -409,21 +471,34 @@ def _content(obj, session, geometry: Geometry, style: Style) -> Content:
         extras = [e for e in session.edit.vehicle.extras if EXTRA_KIND[e.section] in style.kinds]
         if extras:
             where = _where(names, world)
+            rails = _rail_colors(session, style)
             for extra in extras:
                 chain = [where.get(node_id) for node_id in extra.ids]
                 if None in chain:
                     continue
                 color = style.extra_colors[extra.section]
                 if extra.section == "slidenodes":
-                    _add(points, "slidenodes", color, np.array(chain, dtype=np.float32))
+                    _add(points, "slidenodes", rails.get(extra.name, style.rail_color),
+                         np.array(chain, dtype=np.float32))
                     continue
-                if extra.section == "rails" and extra.props.get("looped") in (True, 1) and len(chain) > 2:
-                    chain.append(chain[0])
+                if extra.section in ("torsionbars", "torsionHydros") and len(chain) == 4:
+                    _torsion_bar(lines, extra, chain, style)
+                    continue
+                if extra.section == "rails":
+                    color = rails.get(extra.name, style.rail_color)
+                    if extra.props.get("looped") in (True, 1) and len(chain) > 2:
+                        chain.append(chain[0])
                 segments = [p for pair in zip(chain, chain[1:]) for p in pair]
                 if segments:
                     _add(lines, extra.section, color, np.array(segments, dtype=np.float32))
     if style.problems:
         problems, uids = _problems(session)
+        conflicts = _conflicts(session)
+        if conflicts:
+            where = where if where is not None else _where(names, world)
+            spots = [where[i] for i in conflicts if i in where]
+            if spots:
+                _add(points, "problem", style.problem_color, np.array(spots, dtype=np.float32))
         if problems:
             if uids and len(edges):
                 mask = np.fromiter((uid in uids for uid in geometry.edge_uids.tolist()), dtype=bool, count=len(edges))
@@ -449,6 +524,17 @@ def _content(obj, session, geometry: Geometry, style: Style) -> Content:
     content.lines = {key: np.concatenate(parts).astype(np.float32) for key, parts in lines.items()}
     content.points = {key: np.concatenate(parts).astype(np.float32) for key, parts in points.items()}
     return content
+
+
+def _torsion_bar(lines: dict, extra, chain: list, style: Style) -> None:
+    """A torsion bar as the game draws it: from the first node to both axis nodes in one colour, from the last
+    node to them in another, and the axis between the second and the third node."""
+    first, axis_a, axis_b, last = chain
+    anisotropic = extra.props.get("spring2") or extra.props.get("damp2")
+    one, two = (style.torsion[3], style.torsion[4]) if anisotropic else (style.torsion[0], style.torsion[1])
+    _add(lines, "torsionbars", one, np.array([first, axis_a, first, axis_b], dtype=np.float32))
+    _add(lines, "torsionbars", two, np.array([last, axis_a, last, axis_b], dtype=np.float32))
+    _add(lines, "torsion_axis", style.torsion[2], np.array([axis_a, axis_b], dtype=np.float32))
 
 
 def _add(target: dict, layer: str, color: tuple, array: np.ndarray) -> None:
@@ -513,7 +599,7 @@ def _object_key(obj, session, style: Style) -> tuple:
     mesh = obj.data
     return (session.key, session.part_name, session.link.rev, _object_changes.get(obj.name, 0),
             len(mesh.vertices), len(mesh.edges), tuple(obj.matrix_world.col[3]), tuple(obj.matrix_world.col[0]),
-            obj.jbs.all_nodes, style.content)
+            obj.jbs.all_nodes, style.content, _conflicts(session) if style.problems else None)
 
 
 def _static(context, style: Style) -> Frame:
@@ -521,10 +607,11 @@ def _static(context, style: Style) -> Frame:
     a session or the settings changed."""
     global _frame
     active = context.view_layer.objects.active
-    key = (_generation, style.content, style.scope, style.dim_others, active.name if active else "",
-           tuple(group.link.rev for group in sessions.SESSIONS.values()))
+    scene = sessions.scene_key()
+    key = (_generation, style.content, style.scope, style.dim_others, active.name if active else "", scene)
     if key == _frame.key:
         return _frame
+    _scene[0] = scene
     frame = Frame(key)
     for obj, session, dim in _shown_objects(context, style):
         if obj.mode == "EDIT":
@@ -860,10 +947,10 @@ def _gradient_rows(title: str, scale: Scale, style: Style) -> list[tuple[tuple |
     return rows
 
 
-def _named_rows(counts: dict[str, int], fallback: tuple[tuple, str, int] | None) -> list:
+def _named_rows(counts: dict[str, int], colors: dict[str, tuple], fallback: tuple[tuple, str, int] | None) -> list:
     tr = bpy.app.translations.pgettext_iface
     ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    rows = [(group_color(name), f"{name}  {count}") for name, count in ordered[:LEGEND_ROWS]]
+    rows = [(colors.get(name) or group_color(name), f"{name}  {count}") for name, count in ordered[:LEGEND_ROWS]]
     if len(ordered) > LEGEND_ROWS:
         rows.append(((0.5, 0.5, 0.5), tr("and {count} more").format(count=len(ordered) - LEGEND_ROWS)))
     if fallback is not None and fallback[2]:
@@ -882,8 +969,11 @@ def legend_rows(session, style: Style) -> list[tuple[tuple | None, str]]:
             for extra in vehicle.extras:
                 if EXTRA_KIND[extra.section] in style.kinds:
                     counts[extra.section] = counts.get(extra.section, 0) + 1
-            rows += [(style.extra_colors[s], f"{tr(EXTRA_TITLES[s])}  {counts[s]}")
-                     for s, _, _ in EXTRA_SECTIONS if s in counts]
+            rails = list(_rail_colors(session, style).values())
+            colors = {**style.extra_colors, "torsionbars": style.torsion[0], "torsionHydros": style.torsion[0]}
+            if rails:
+                colors["rails"] = colors["slidenodes"] = rails[0]
+            rows += [(colors[s], f"{tr(EXTRA_TITLES[s])}  {counts[s]}") for s, _, _ in EXTRA_SECTIONS if s in counts]
         if style.beams:
             others = tr("Other beams")
             if style.beam_by == "TYPE":
@@ -905,13 +995,24 @@ def legend_rows(session, style: Style) -> list[tuple[tuple | None, str]]:
                     else:
                         counts[name] = counts.get(name, 0) + 1
                 rows.append((None, CATEGORY_KEYS.get(style.beam_by, tr("Part"))))
-                rows += _named_rows(counts, (style.normal_color, others, rest) if style.normal else None)
+                rows += _named_rows(counts, _category_colors(session, "beams", style.beam_by),
+                                    (style.normal_color, others, rest) if style.normal else None)
             else:
                 rows += _gradient_rows(style.beam_by, _values(session, "beams", style.beam_by)[1], style)
         if style.nodes:
             nodes = vehicle.nodes.values()
             if style.node_by == "PLAIN":
                 rows.append((style.node_color, f"{tr('Nodes')}  {len(vehicle.nodes)}"))
+            elif style.node_by == "FLAGS":
+                counts: dict[tuple, int] = {}
+                for node in nodes:
+                    color = node_flag_color(node.props, style)
+                    counts[color] = counts.get(color, 0) + 1
+                titles = {color: ("collision false" if flag == "collision" else flag) for flag, color in style.node_flags}
+                rows += [(color, f"{titles[color]}  {counts[color]}") for _, color in style.node_flags
+                         if counts.get(color) and color in titles]
+                if counts.get(style.node_color):
+                    rows.append((style.node_color, f"{tr('Nodes')}  {counts[style.node_color]}"))
             elif style.node_by in ("GROUP", "PART"):
                 counts, rest = {}, 0
                 for node in nodes:
@@ -921,16 +1022,18 @@ def legend_rows(session, style: Style) -> list[tuple[tuple | None, str]]:
                     else:
                         counts[name] = counts.get(name, 0) + 1
                 rows.append((None, tr("Node groups") if style.node_by == "GROUP" else tr("Parts")))
-                rows += _named_rows(counts, (style.node_color, tr("Without a group"), rest))
+                rows += _named_rows(counts, _category_colors(session, "nodes", style.node_by),
+                                    (style.node_color, tr("Without a group"), rest))
             else:
                 rows += _gradient_rows(style.node_by, _values(session, "nodes", style.node_by)[1], style)
         if style.problems:
             problems = _problems(session)[0]
-            count = len(problems.beams) + len(problems.faces) + len(problems.nodes)
+            count = len(problems.beams) + len(problems.faces) + len(problems.nodes) + len(conflicts)
             if count:
                 rows.append((style.problem_color, f"{tr('Problems')}  {count}"))
         return rows
-    return _kept((session.key, session.link.rev, "legend", style.content), make)
+    conflicts = _conflicts(session) if style.problems else frozenset()
+    return _kept((session.key, session.link.rev, "legend", style.content, conflicts), make)
 
 
 def draw_pixel() -> None:

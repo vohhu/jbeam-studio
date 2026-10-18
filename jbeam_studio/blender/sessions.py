@@ -395,6 +395,51 @@ def node_entry(session: ObjectSession, node_id: str) -> NodeEntry | None:
     return vehicle.nodes.get(node_id) or vehicle.external_nodes.get(node_id)
 
 
+_owners: tuple = ((), {})
+
+
+def scene_key() -> tuple:
+    """The state of every open session; what depends on all of them is worked out again when it changes."""
+    return tuple((group.key, group.link.rev) for group in SESSIONS.values() if group.views)
+
+
+def _node_owners(key: tuple | None = None) -> dict:
+    """For each vehicle model, the parts of the open sessions that define each node id, with their slot types."""
+    global _owners
+    key = scene_key() if key is None else key
+    if _owners[0] != key:
+        owners: dict[str, dict[str, set]] = {}
+        for group in SESSIONS.values():
+            if not group.views:
+                continue
+            vehicle = group.edit.vehicle
+            by_id = owners.setdefault(vehicle.model or "", {})
+            for node_id, node in vehicle.nodes.items():
+                part = vehicle.parts.get(node.part)
+                by_id.setdefault(node_id, set()).add((node.part or "", frozenset(part.slot_types) if part else ()))
+        _owners = (key, owners)
+    return _owners[1]
+
+
+def scene_conflicts(session: ObjectSession, key: tuple | None = None) -> dict[str, list[str]]:
+    """Nodes of the session's part that other open parts of the same vehicle define too, by id, with those parts.
+    Parts of the same slot type are alternatives that are never in a vehicle together, so they do not count.
+    `key` is the `scene_key` when the caller has it."""
+    vehicle = session.edit.vehicle
+    owners = _node_owners(key).get(vehicle.model or "", {})
+    found = {}
+    for node_id, node in vehicle.nodes.items():
+        if session.scope is not None and node.part != session.scope:
+            continue
+        part = vehicle.parts.get(node.part)
+        slots = frozenset(part.slot_types) if part else frozenset()
+        others = sorted(name for name, other_slots in owners.get(node_id, ())
+                        if name != (node.part or "") and not slots & other_slots)
+        if others:
+            found[node_id] = others
+    return found
+
+
 def rebuild(obj, session: ObjectSession, selected: set[str] | None = None, others: bool = True, data=None) -> None:
     """Builds the mesh from the session's current state, keeping the selection of nodes; with `others`, the
     meshes of the other parts of the vehicle that show another state are built again too."""

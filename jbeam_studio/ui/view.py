@@ -12,12 +12,21 @@ def _color(name: str, default: tuple, description: str = ""):
                                description=description)
 
 
+def game(r: int, g: int, b: int) -> tuple:
+    """A colour of the game's debug view (lua/vehicle/bdebugImpl.lua), given from 0 to 255."""
+    return (r / 255, g / 255, b / 255)
+
+
 BEAM_TYPES = (("|SUPPORT", "color_support"), ("|BOUNDED", "color_bounded"), ("|ANISOTROPIC", "color_anisotropic"),
               ("|LBEAM", "color_lbeam"), ("|PRESSURED", "color_pressured"))
 """Beam types with a colour of their own, and the setting that holds it."""
 EXTRA_SECTIONS = (("hydros", "color_hydros", "Hydros"), ("torsionbars", "color_torsionbars", "Torsion bars"),
-                  ("torsionHydros", "color_torsion_hydros", "Torsion hydros"), ("rails", "color_rails", "Rails"),
-                  ("slidenodes", "color_slidenodes", "Slide nodes"))
+                  ("torsionHydros", "color_torsionbars", "Torsion hydros"), ("rails", "color_rails", "Rails"),
+                  ("slidenodes", "color_rails", "Slide nodes"))
+"""Sections drawn as hydros and rails, the setting of their colour, and their title."""
+NODE_FLAGS = (("fixed", "color_fixed"), ("selfCollision", "color_self_collision"),
+              ("collision", "color_no_collision"))
+"""Node flags the game colours nodes by, first match first: fixed, selfCollision, and collision set to false."""
 VALUE_KEYS = ("beamSpring", "beamDamp", "beamDeform", "beamStrength", "nodeWeight")
 CATEGORIES = ("BREAK_GROUP", "DEFORM_GROUP", "GROUP", "PART")
 
@@ -62,41 +71,47 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
     normal_beams: BoolProperty(name="Other beams", default=False,
                                description="Also draw the beams that Colour by gives no colour, such as beams of the "
                                            "normal type, in their own colour")
-    normal_color: _color("Colour of other beams", (0.62, 0.68, 0.76))
-    color_support: _color("SUPPORT", (1.0, 0.62, 0.15))
-    color_bounded: _color("BOUNDED", (0.25, 0.55, 1.0))
-    color_anisotropic: _color("ANISOTROPIC", (0.75, 0.4, 1.0))
-    color_lbeam: _color("LBEAM", (0.35, 0.9, 0.35))
-    color_pressured: _color("PRESSURED", (0.2, 0.9, 0.9))
-    color_unknown: _color("Unknown type", (1.0, 0.25, 0.25), "Beam types the game does not know, such as \"| BOUNDED\"")
+    normal_color: _color("Colour of other beams", game(0, 223, 0))
+    color_support: _color("SUPPORT", game(223, 0, 223))
+    color_bounded: _color("BOUNDED", game(255, 255, 0))
+    color_anisotropic: _color("ANISOTROPIC", game(255, 135, 63))
+    color_lbeam: _color("LBEAM", game(92, 92, 92))
+    color_pressured: _color("PRESSURED", game(0, 255, 255))
+    color_unknown: _color("Unknown type", game(255, 0, 0), "Beam types the game does not know, such as \"| BOUNDED\"")
     line_width: FloatProperty(name="Width", default=2.5, min=1.0, max=10.0, step=50,
                               description="Width of coloured beams, in pixels")
 
     # gradient
     palette: EnumProperty(
         name="Gradient",
-        items=[("RAINBOW", "Rainbow", "Blue, cyan, green, yellow, red"),
+        items=[("BEAMNG", "BeamNG", "White to red, as the game shows beam values"),
+               ("RAINBOW", "Rainbow", "Blue, cyan, green, yellow, red"),
                ("COOLWARM", "Cool to warm", "Blue, grey, red"),
                ("VIRIDIS", "Viridis", "Purple, teal, yellow; easy to read for colour-blind people"),
                ("HEAT", "Heat", "Dark red, orange, yellow, white"),
                ("CUSTOM", "Custom", "From the low colour to the high colour")],
-        default="RAINBOW",
+        default="BEAMNG",
     )
     gradient_low: _color("Low", (0.1, 0.2, 0.9))
     gradient_high: _color("High", (1.0, 0.2, 0.1))
-    infinite_color: _color("FLT_MAX", (0.8, 0.45, 1.0), "Values such as FLT_MAX, which do not fit a gradient")
+    infinite_color: _color("FLT_MAX", game(255, 0, 255), "Values such as FLT_MAX, which do not fit a gradient")
 
     # nodes
     node_colors: BoolProperty(name="Nodes", default=False, description="Draw nodes in colour, by what Colour by says")
     node_color_by: EnumProperty(
         name="Colour nodes by",
-        items=[("PLAIN", "One colour", "Every node in the node colour"),
+        items=[("FLAGS", "Flags", "As the game shows nodes: fixed, selfCollision and collision false in their "
+                                  "colours, the others in the node colour"),
+               ("PLAIN", "One colour", "Every node in the node colour"),
                ("GROUP", "Group", "A colour for each node group; nodes without one in the node colour"),
                ("PART", "Part", "A colour for each part"),
                ("nodeWeight", "nodeWeight", "Weight, on the gradient from light to heavy")],
-        default="PLAIN",
+        default="FLAGS",
     )
-    node_color: _color("Node colour", (0.92, 0.92, 0.96))
+    node_color: _color("Node colour", game(0, 255, 255))
+    color_fixed: _color("fixed", game(255, 0, 255), "Nodes with \"fixed\": true")
+    color_self_collision: _color("selfCollision", game(255, 255, 0), "Nodes with \"selfCollision\": true")
+    color_no_collision: _color("collision false", game(255, 0, 212), "Nodes with \"collision\": false")
     node_size: FloatProperty(name="Size", default=7.0, min=2.0, max=30.0, description="Size of nodes, in pixels")
     ghosts: BoolProperty(name="Nodes of other parts", default=True,
                          description="Mark nodes that belong to other parts, which cannot be edited here")
@@ -113,11 +128,21 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
                ("rails", "Rails", "Draw rails and the slide nodes on them")],
         default={"hydros", "torsionbars", "rails"},
     )
-    color_hydros: _color("Hydros", (0.25, 0.75, 1.0))
-    color_torsionbars: _color("Torsion bars", (1.0, 0.85, 0.2))
-    color_torsion_hydros: _color("Torsion hydros", (1.0, 0.5, 0.2))
-    color_rails: _color("Rails", (1.0, 0.3, 0.75))
-    color_slidenodes: _color("Slide nodes", (1.0, 0.3, 0.75))
+    color_hydros: _color("Hydros", game(0, 100, 255))
+    color_torsionbars: _color("Torsion bars", game(0, 255, 0), "The first half: from the first node to the axis")
+    color_torsionbars_second: _color("Second half", game(0, 255, 255), "From the last node to the axis")
+    color_torsion_axis: _color("Axis", game(255, 128, 0), "Between the second and the third node")
+    color_torsion_anisotropic: _color("Anisotropic", game(255, 0, 255),
+                                      "Torsion bars with spring2 or damp2: the first half")
+    color_torsion_anisotropic_second: _color("Anisotropic, second half", game(0, 0, 255))
+    rail_colors: EnumProperty(
+        name="Rails",
+        items=[("EACH", "One for each", "A colour for each rail, as in the game; slide nodes in the colour of their "
+                                        "rail"),
+               ("ONE", "One colour", "Every rail and slide node in the rail colour")],
+        default="EACH",
+    )
+    color_rails: _color("Rail colour", (1.0, 0.3, 0.75))
     extra_width: FloatProperty(name="Width", default=3.0, min=1.0, max=12.0, step=50,
                                description="Width of hydros, torsion bars and rails, in pixels")
 
@@ -139,14 +164,14 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
         default="SELECTED",
     )
     label_size: IntProperty(name="Text size", default=12, min=6, max=40)
-    label_color: _color("Name colour", (1.0, 1.0, 1.0))
+    label_color: _color("Name colour", game(255, 0, 255))
     ghost_label_color: _color("Names of nodes of other parts", (1.0, 0.7, 0.35))
 
     # centre of mass
     center_of_mass: BoolProperty(name="Centre of mass", default=True,
                                  description="Mark the centre of mass of the vehicle or part of the active object, "
                                              "from the weights of its nodes")
-    center_color: _color("Colour", (1.0, 1.0, 1.0))
+    center_color: _color("Colour", game(255, 0, 0))
     selection_center: BoolProperty(name="Of the selected nodes", default=True,
                                    description="In Edit Mode, also mark the centre of mass of all selected nodes")
     selection_center_color: _color("Colour of the selected nodes' centre", (0.3, 1.0, 0.45))
