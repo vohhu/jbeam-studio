@@ -41,6 +41,8 @@ class Group:
         self.saved_at: float | None = None
         """When files were last written, by a save or an automatic save."""
         self.saved_files: list[str] = []
+        self.shared: dict[Path, str] = {}
+        """Text of each file as last passed between sessions, for files the session changed since reading them."""
 
 
 def _shared(name: str):
@@ -428,6 +430,60 @@ def sync_others(session: ObjectSession) -> None:
             view.built = mesh_io.fingerprint(obj)
             continue
         rebuild(obj, view, others=False, data=data)
+    share_changes(session)
+
+
+_sharing = False
+
+
+def share_changes(session: ObjectSession) -> None:
+    """Passes the session's changes of files to the other sessions that read the same files, such as other parts
+    of one .jbeam file imported on their own: a session that has the file as it was before the change takes the
+    change as a step of its own history and builds its objects again; one that changed the file itself keeps it."""
+    global _sharing
+    group = session.group
+    if _sharing:
+        return
+    changed: dict[Path, tuple[str, str]] = {}
+    for path in set(group.edit.texts) | set(group.shared):
+        text = group.edit.text_of(path)
+        before = group.shared.get(path, group.edit.base_text(path))
+        if before is not None and before != text:
+            changed[path] = (before, text)
+            group.shared[path] = text
+    if not changed:
+        return
+    _sharing = True
+    try:
+        for other in list(SESSIONS.values()):
+            if other is group or not other.views:
+                continue
+            taken = {}
+            for path, (before, text) in changed.items():
+                if not other.edit.knows(path):
+                    continue
+                current = other.edit.text_of(path)
+                if current == before:
+                    taken[path] = text
+                if current in (before, text):
+                    other.shared[path] = text
+            if not taken:
+                continue
+            views = [(o, v) for v in other.views.values() if (o := object_of(v)) is not None]
+            try:
+                editing = [(o, v) for o, v in views if o.mode == "EDIT"]
+                if editing:
+                    commit_edit_mesh(*editing[0])
+                with other.edit.transaction(f"Take the edits of {', '.join(p.name for p in taken)}"):
+                    for path, text in taken.items():
+                        other.edit.replace_text(path, text)
+            except EditError:
+                continue
+            other.link.changed()
+            for obj, view in views:
+                rebuild(obj, view, others=False)
+    finally:
+        _sharing = False
 
 
 def _shape(data) -> int:
@@ -489,9 +545,14 @@ def autosave(obj, session: ObjectSession) -> list[Path]:
 
 
 def note_saved(session: ObjectSession, saved: list[Path]) -> None:
+    """Records a save; other sessions that have the saved files with the same text take them as saved."""
     if saved:
         session.saved_at = time.time()
         session.saved_files = [p.name for p in saved]
+        for other in SESSIONS.values():
+            if other is not session.group:
+                for path in saved:
+                    other.edit.accept_disk(path)
 
 
 def in_sync(obj, session: ObjectSession) -> bool:
@@ -616,7 +677,7 @@ def watched_files(session: ObjectSession) -> list[Path]:
 
 def check_disk(session: ObjectSession) -> bool:
     """Updates `changed_on_disk`; True if it changed."""
-    changed = session.edit.changed_on_disk(watched_files(session))
+    changed = [p for p in session.edit.changed_on_disk(watched_files(session)) if not session.edit.accept_disk(p)]
     if changed != session.changed_on_disk:
         session.changed_on_disk = changed
         return True

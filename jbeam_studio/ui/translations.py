@@ -6,7 +6,7 @@ RUSSIAN = {
     # panel
     "JBeam Studio": "JBeam Studio",
     "Vehicle (.pc)": "Машина (.pc)",
-    "Part (.jbeam)": "Часть (.jbeam)",
+    "Parts (.jbeam)": "Части (.jbeam)",
     "Import a vehicle or a part to edit it": "Импортируйте машину или часть, чтобы редактировать её",
     "This object is a copy of a JBeam object, so it is not linked to the files.":
         "Этот объект — копия JBeam-объекта, поэтому он не связан с файлами.",
@@ -50,15 +50,23 @@ RUSSIAN = {
         "Показать в меше этой части все ноды машины, ноды других частей — оранжевыми, чтобы новые балки и грани "
         "части могли идти к любой из них",
     "Assemble a vehicle from a part config (.pc) and show each of its parts as an object, in a collection of its "
-    ".jbeam file under the JBeam collection":
+    ".jbeam file under the JBeam collection; several files give several vehicles":
         "Собрать машину по конфигу (.pc) и показать каждую её часть отдельным объектом в коллекции её файла .jbeam "
-        "внутри коллекции JBeam",
-    "Import JBeam Part": "Импорт JBeam-части",
-    "Show one part of a .jbeam file as a mesh": "Показать одну часть файла .jbeam как меш",
-    "Show one part of a .jbeam file as a mesh, with the nodes of other parts it uses":
-        "Показать одну часть файла .jbeam как меш вместе с нодами других частей, которые она использует",
+        "внутри коллекции JBeam; несколько файлов дают несколько машин",
+    "Import JBeam Parts": "Импорт JBeam-частей",
+    "Choose the parts of the .jbeam files to import": "Выбрать части файлов .jbeam для импорта",
+    "Show parts of .jbeam files as objects, with the nodes of other parts they use; with several parts, choose "
+    "which ones":
+        "Показать части файлов .jbeam объектами вместе с нодами других частей, которые они используют; если частей "
+        "несколько — выбрать, какие",
+    "All parts": "Все части",
+    "Import every part of the chosen files": "Импортировать все части выбранных файлов",
+    "{count} of {total} parts": "Выбрано частей: {count} из {total}",
+    "Choose the parts to import": "Выберите части для импорта",
+    "Loaded {count} parts from {files} files; {errors} errors, {warnings} warnings":
+        "Загружено частей: {count} из файлов: {files}; ошибок {errors}, предупреждений {warnings}",
     "JBeam Vehicle (.pc)": "JBeam-машина (.pc)",
-    "JBeam Part (.jbeam)": "JBeam-часть (.jbeam)",
+    "JBeam Parts (.jbeam)": "JBeam-части (.jbeam)",
     "Apply Mesh Edits": "Применить правки меша",
     "Write the edits of the mesh into the JBeam files in memory": "Записать правки меша в JBeam-файлы в памяти",
     "Save JBeam Files": "Сохранить JBeam-файлы",
@@ -93,14 +101,40 @@ RUSSIAN = {
     "First number": "Первый номер",
     "Suffix": "Суффикс",
     "and {count} more groups": "и ещё групп: {count}",
-    "Colours": "Цвета",
-    "Beam types": "Типы балок",
-    "Draw beams of special types in colour: SUPPORT, BOUNDED, ANISOTROPIC, LBEAM, PRESSURED; types the game does "
-    "not know in red":
-        "Рисовать балки особых типов цветом: SUPPORT, BOUNDED, ANISOTROPIC, LBEAM, PRESSURED; неизвестные игре типы — "
-        "красным",
-    "Node groups": "Группы нод",
-    "Draw each node in the colour of its group": "Рисовать каждую ноду цветом её группы",
+    "Draw beams in colour, by what Colour by says": "Рисовать балки цветом по выбранному признаку",
+    "Colour beams by": "Цвет балок по",
+    "Beams of special types: SUPPORT, BOUNDED, ANISOTROPIC, LBEAM, PRESSURED; types the game does not know in red":
+        "Балки особых типов: SUPPORT, BOUNDED, ANISOTROPIC, LBEAM, PRESSURED; неизвестные игре типы — красным",
+    "Stiffness, from blue (low) to red (high)": "Жёсткость: от синего (мало) до красного (много)",
+    "Damping, from blue (low) to red (high)": "Демпфирование: от синего (мало) до красного (много)",
+    "Force that bends a beam for good, from blue (low) to red (high)":
+        "Сила, при которой балка гнётся насовсем: от синего (мало) до красного (много)",
+    "Force that breaks a beam, from blue (low) to red (high)":
+        "Сила, при которой балка рвётся: от синего (мало) до красного (много)",
+    "Draw nodes in colour, by what Colour by says": "Рисовать ноды цветом по выбранному признаку",
+    "Colour nodes by": "Цвет нод по",
+    "A colour for each node group": "Свой цвет у каждой группы нод",
+    "Weight, from blue (light) to red (heavy)": "Весу: от синего (лёгкие) до красного (тяжёлые)",
+    "Kinds": "Виды",
+    "Draw hydros": "Рисовать гидравлику",
+    "Draw torsion bars and torsion hydros": "Рисовать торсионы и торсионную гидравлику",
+    "Draw rails and the slide nodes on them": "Рисовать рельсы и скользящие ноды на них",
+    "Through faces": "Сквозь грани",
+    "Draw coloured beams and nodes, hydros, rails and node names of JBeam objects through faces; otherwise faces "
+    "hide them, except in X-ray and wireframe":
+        "Рисовать цветные балки и ноды, гидравлику, рельсы и имена нод JBeam-объектов сквозь грани; иначе грани их "
+        "закрывают, кроме режимов X-ray и каркаса",
+    "Line width": "Толщина линий",
+    "Width of coloured beams, hydros, torsion bars and rails, in pixels":
+        "Толщина цветных балок, гидравлики, торсионов и рельсов в пикселях",
+    "Opacity of coloured beams, nodes, hydros, torsion bars and rails":
+        "Непрозрачность цветных балок, нод, гидравлики, торсионов и рельсов",
+    "Centre of mass": "Центр масс",
+    "Mark the centre of mass of the vehicle, from the weights of its nodes":
+        "Отмечать центр масс машины по весам её нод",
+    "Mass: {mass} kg": "Масса: {mass} кг",
+    "Mass: {mass} kg, this part {part} kg": "Масса: {mass} кг, эта часть {part} кг",
+    "Mass of the selection: {mass} kg": "Масса выделенного: {mass} кг",
     "Legend": "Легенда",
     "Show what the colours mean in the viewport": "Показывать во вьюпорте, что означают цвета",
     "Set Property": "Задать свойство",

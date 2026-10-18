@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
 
 class JBS_ViewSettings(bpy.types.PropertyGroup):
@@ -17,13 +17,44 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
     label_size: IntProperty(name="Text size", default=12, min=6, max=40)
     ghosts: BoolProperty(name="Mark nodes of other parts", default=True,
                          description="Draw nodes that belong to other parts, which cannot be edited here, in orange")
-    beam_colors: BoolProperty(name="Beam types", default=True,
-                              description="Draw beams of special types in colour: SUPPORT, BOUNDED, ANISOTROPIC, "
-                                          "LBEAM, PRESSURED; types the game does not know in red")
-    group_colors: BoolProperty(name="Node groups", default=False,
-                               description="Draw each node in the colour of its group")
+    beam_colors: BoolProperty(name="Beams", default=True, description="Draw beams in colour, by what Colour by says")
+    beam_color_by: EnumProperty(
+        name="Colour beams by",
+        items=[("TYPE", "Type", "Beams of special types: SUPPORT, BOUNDED, ANISOTROPIC, LBEAM, PRESSURED; types the "
+                                "game does not know in red"),
+               ("beamSpring", "beamSpring", "Stiffness, from blue (low) to red (high)"),
+               ("beamDamp", "beamDamp", "Damping, from blue (low) to red (high)"),
+               ("beamDeform", "beamDeform", "Force that bends a beam for good, from blue (low) to red (high)"),
+               ("beamStrength", "beamStrength", "Force that breaks a beam, from blue (low) to red (high)")],
+        default="TYPE",
+    )
+    group_colors: BoolProperty(name="Nodes", default=False, description="Draw nodes in colour, by what Colour by says")
+    node_color_by: EnumProperty(
+        name="Colour nodes by",
+        items=[("GROUP", "Group", "A colour for each node group"),
+               ("nodeWeight", "nodeWeight", "Weight, from blue (light) to red (heavy)")],
+        default="GROUP",
+    )
     extras: BoolProperty(name="Hydros and rails", default=True,
                          description="Draw hydros, torsion bars, rails and slide nodes, which are not mesh edges")
+    extra_kinds: EnumProperty(
+        name="Kinds", options={"ENUM_FLAG"},
+        items=[("hydros", "Hydros", "Draw hydros"),
+               ("torsionbars", "Torsion bars", "Draw torsion bars and torsion hydros"),
+               ("rails", "Rails", "Draw rails and the slide nodes on them")],
+        default={"hydros", "torsionbars", "rails"},
+    )
+    through_faces: BoolProperty(
+        name="Through faces", default=False,
+        description="Draw coloured beams and nodes, hydros, rails and node names of JBeam objects through faces; "
+                    "otherwise faces hide them, except in X-ray and wireframe",
+    )
+    line_width: FloatProperty(name="Line width", default=2.5, min=1.0, max=10.0, step=50,
+                              description="Width of coloured beams, hydros, torsion bars and rails, in pixels")
+    line_opacity: FloatProperty(name="Opacity", default=1.0, min=0.1, max=1.0, subtype="FACTOR",
+                                description="Opacity of coloured beams, nodes, hydros, torsion bars and rails")
+    center_of_mass: BoolProperty(name="Centre of mass", default=True,
+                                 description="Mark the centre of mass of the vehicle, from the weights of its nodes")
     expanded_extra: StringProperty()
     legend: BoolProperty(name="Legend", default=True, description="Show what the colours mean in the viewport")
     text_syntax: BoolProperty(

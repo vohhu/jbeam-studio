@@ -91,6 +91,35 @@ def test_a_new_beam_of_a_part_to_a_node_of_another_part_goes_to_that_part(car):
     assert mesh_io.mesh_rev(body) == session.link.rev
 
 
+def test_parts_of_one_file_imported_on_their_own_take_each_other_s_edits(car):
+    path = car / "doors.jbeam"
+    objects = {}
+    for part in ("car_door_L_stock", "car_door_L_sport"):
+        assert bpy.ops.jbs.import_jbeam(filepath=str(path), part_name=part) == {"FINISHED"}
+        objects[part] = bpy.context.active_object
+    stock, sport = (sessions.session_of(objects[p]) for p in ("car_door_L_stock", "car_door_L_sport"))
+    assert stock.group is not sport.group
+    assert [c.name for c in objects["car_door_L_sport"].users_collection] == ["doors.jbeam"]
+    assert objects["car_door_L_stock"].users_collection[0] == objects["car_door_L_sport"].users_collection[0]
+    bpy.context.window_manager.jbs_auto_save = True
+    first = stock.link.rev
+    edit_all(objects["car_door_L_stock"])
+    bm = bmesh.from_edit_mesh(objects["car_door_L_stock"].data)
+    vertex(stock, bm, "d1l").co = (0.65, 0.0, 0.5)
+    bmesh.update_edit_mesh(objects["car_door_L_stock"].data)
+    sessions.apply_live(objects["car_door_L_stock"], stock)
+    moved = stock.edit.text_of(path)
+    assert '["d1l", 0.650,' in moved and sport.edit.text_of(path) == moved
+    assert sport.edit.dirty_files() == [] and not sessions.check_disk(sport)
+    assert mesh_io.mesh_rev(objects["car_door_L_sport"]) == sport.link.rev
+    bm = bmesh.from_edit_mesh(objects["car_door_L_stock"].data)
+    vertex(stock, bm, "d1l").co = (0.6, 0.0, 0.5)
+    bmesh.update_edit_mesh(objects["car_door_L_stock"].data)
+    mesh_io.set_rev(objects["car_door_L_stock"], first)
+    handlers.on_undo_post()
+    assert '["d1l", 0.6,' in stock.edit.text_of(path) and sport.edit.text_of(path) == stock.edit.text_of(path)
+
+
 def test_a_part_made_a_plain_mesh_leaves_the_other_parts_linked(car):
     parts = import_pc(car)
     (body, body_session), (door, _) = parts[BODY], parts[DOOR]

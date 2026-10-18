@@ -12,6 +12,7 @@ from ..blender import mesh_io, sessions
 from ..core import docs
 from ..core.diagnostics import Severity
 from ..core.edit import fixes
+from ..core.physics import mass
 from ..core.sjson import Kind
 from .operators import (
     EXTRA_ICONS, FIX_GROUPS, entries_of_kind, extra_key, extra_label, extra_properties, fixable, kind_of_select_mode,
@@ -23,6 +24,24 @@ HIDDEN_KEYS = {"slotType", "partName", "partOrigin", "partPath", "skinName", "gl
 ICONS = {Severity.ERROR: "ERROR", Severity.WARNING: "ERROR", Severity.INFO: "INFO"}
 DIAGNOSTICS_SHOWN = 30
 EXTRAS_SHOWN = 25
+
+
+_masses: dict = {}
+
+
+def _mass(session, part: str | None) -> float:
+    """The weight of the nodes of a part, or of the whole vehicle, worked out once for each state."""
+    key = (session.key, session.link.rev, part)
+    if key not in _masses:
+        if len(_masses) > 64:
+            _masses.clear()
+        nodes = session.edit.vehicle.nodes.values()
+        _masses[key] = mass(session.edit.vehicle, [n for n in nodes if part is None or n.part == part])[0]
+    return _masses[key]
+
+
+def _kg(value: float) -> str:
+    return f"{value:,.1f}".replace(",", " ")
 
 
 def wrapped(layout, text: str, width: int = 46, icon: str = "NONE") -> None:
@@ -51,7 +70,7 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
         layout = self.layout
         row = layout.row(align=True)
         row.operator("jbs.import_pc", text="Vehicle (.pc)", icon="IMPORT")
-        row.operator("jbs.import_jbeam", text="Part (.jbeam)", icon="IMPORT")
+        row.operator("jbs.import_jbeam", text="Parts (.jbeam)", icon="IMPORT")
         obj = context.active_object
         session = sessions.session_of(obj)
         if session is None:
@@ -73,9 +92,13 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
         column = box.column(align=True)
         column.label(text=Path(settings.path).name, icon="FILE_3D" if settings.kind == "PC" else "FILE")
         column.label(text=summary(session))
+        total = _mass(session, None)
         if session.scope is None:
+            column.label(text=tr("Mass: {mass} kg").format(mass=_kg(total)))
             box.prop(settings, "active_part", icon="OBJECT_DATA")
         else:
+            column.label(text=tr("Mass: {mass} kg, this part {part} kg").format(
+                mass=_kg(total), part=_kg(_mass(session, session.scope))))
             row = box.row(align=True)
             row.label(text=tr("Part: {part}").format(part=session.scope), icon="OBJECT_DATA")
             row.prop(settings, "all_nodes", text="", icon="OUTLINER_OB_POINTCLOUD", toggle=True)
@@ -237,6 +260,9 @@ class JBS_PT_selection(_SessionPanel, bpy.types.Panel):
             layout.operator("jbs.select_by_property", icon="RESTRICT_SELECT_OFF").kind = kind
             return
         layout.label(text=tr(TITLES[kind]).format(count=len(entries)))
+        if kind == "nodes":
+            layout.label(text=tr("Mass of the selection: {mass} kg").format(
+                mass=_kg(mass(session.edit.vehicle, entries)[0])), icon="PHYSICS")
         if kind == "nodes" and len(entries) > 1:
             layout.label(text=", ".join(e.id for e in entries[:12]) + (" \u2026" if len(entries) > 12 else ""))
         if kind == "nodes" and len(entries) == 1:
@@ -446,11 +472,22 @@ class JBS_PT_view(_Panel, bpy.types.Panel):
         layout.prop(view, "labels", expand=True)
         layout.prop(view, "label_size")
         layout.prop(view, "ghosts")
-        row = layout.row(align=True)
-        row.label(text="Colours")
+        layout.prop(view, "through_faces", icon="MOD_WIREFRAME")
+        column = layout.column(align=True)
+        row = column.row(align=True)
         row.prop(view, "beam_colors", toggle=True)
+        row.prop(view, "beam_color_by", text="")
+        row = column.row(align=True)
         row.prop(view, "group_colors", toggle=True)
+        row.prop(view, "node_color_by", text="")
         layout.prop(view, "extras")
+        row = layout.row(align=True)
+        row.active = view.extras
+        row.prop(view, "extra_kinds", expand=True)
+        column = layout.column(align=True)
+        column.prop(view, "line_width")
+        column.prop(view, "line_opacity", slider=True)
+        layout.prop(view, "center_of_mass")
         layout.prop(view, "legend")
         layout.prop(view, "text_highlight")
         layout.prop(view, "text_follow")

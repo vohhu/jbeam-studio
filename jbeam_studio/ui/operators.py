@@ -10,7 +10,7 @@ from pathlib import Path
 
 import bmesh
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 from ..blender import mesh_io, sessions
@@ -108,102 +108,167 @@ def _select_only(context, obj) -> None:
     context.view_layer.objects.active = obj
 
 
-def _finish_import(operator, context, kind: str, path: Path, part_name: str = ""):
+def _finish_import(operator, context, imports: list[tuple[str, Path, list[str]]]):
+    """Imports vehicles (kind "PC") and parts of .jbeam files (kind "PART" with part names), selects what was
+    imported with the main part of the first vehicle active, and reports what was loaded."""
     _start_in_object_mode(context)
-    try:
-        objects = sessions.create_objects(context, kind, path, [part_name] if part_name else [],
-                                          preferences.vehicle_roots())
-    except (OSError, EditError) as error:
-        operator.report({"ERROR"}, str(error))
+    objects = []
+    for kind, path, parts in imports:
+        try:
+            objects += sessions.create_objects(context, kind, path, parts, preferences.vehicle_roots())
+        except (OSError, EditError) as error:
+            operator.report({"ERROR"}, f"{path.name}: {error}")
+    if not objects:
         return {"CANCELLED"}
     session = sessions.session_of(objects[0])
     main = session.edit.vehicle.main_part
-    obj = next((o for o in objects if o.jbs.part_name == main), objects[0])
+    obj = next((o for o in objects if o.jbs.part_name == main and sessions.session_of(o).group is session.group),
+               objects[0])
     _select_only(context, obj)
     for other in objects:
         other.select_set(True)
-    diagnostics = session.edit.vehicle.diagnostics
-    name = f"{path.parent.name} ({path.stem})" if kind == "PC" else obj.name
-    operator.report({"WARNING" if diagnostics.has_errors() else "INFO"},
-                    tr("Loaded {name}: {summary}; {errors} errors, {warnings} warnings").format(
-                        name=name, summary=summary(session), errors=len(diagnostics.errors()),
-                        warnings=len(diagnostics.warnings())))
+    groups = list({id(s.group): s.group for s in map(sessions.session_of, objects)}.values())
+    errors = sum(len(g.edit.vehicle.diagnostics.errors()) for g in groups)
+    warnings = sum(len(g.edit.vehicle.diagnostics.warnings()) for g in groups)
+    if len(imports) == 1:
+        kind, path, _ = imports[0]
+        name = f"{path.parent.name} ({path.stem})" if kind == "PC" else obj.name
+        message = tr("Loaded {name}: {summary}; {errors} errors, {warnings} warnings").format(
+            name=name, summary=summary(session), errors=errors, warnings=warnings)
+    else:
+        message = tr("Loaded {count} parts from {files} files; {errors} errors, {warnings} warnings").format(
+            count=len(objects), files=len({p for _, p, _ in imports}), errors=errors, warnings=warnings)
+    operator.report({"WARNING" if errors else "INFO"}, message)
     return {"FINISHED"}
+
+
+def _chosen_paths(operator) -> list[Path]:
+    """The files chosen in the file browser: several with Shift or Ctrl, or the one of `filepath`."""
+    names = [f.name for f in operator.files if f.name]
+    if names:
+        directory = Path(operator.directory) if operator.directory else Path(operator.filepath).parent
+        return [directory / name for name in names]
+    return [Path(operator.filepath)]
 
 
 class JBS_OT_import_pc(bpy.types.Operator, ImportHelper):
     bl_idname = "jbs.import_pc"
     bl_label = "Import JBeam Vehicle"
     bl_description = ("Assemble a vehicle from a part config (.pc) and show each of its parts as an object, in a "
-                      "collection of its .jbeam file under the JBeam collection")
+                      "collection of its .jbeam file under the JBeam collection; several files give several "
+                      "vehicles")
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ".pc"
     filter_glob: StringProperty(default="*.pc", options={"HIDDEN"})
+    files: CollectionProperty(type=bpy.types.OperatorFileListElement, options={"HIDDEN", "SKIP_SAVE"})
+    directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})
 
     def execute(self, context):
-        return _finish_import(self, context, "PC", Path(self.filepath))
+        return _finish_import(self, context, [("PC", path, []) for path in _chosen_paths(self)])
 
 
-_part_items: list = []
+class JBS_PartChoice(bpy.types.PropertyGroup):
+    name: StringProperty()
+    path: StringProperty()
+    chosen: BoolProperty(name="Import")
 
 
-def _part_items_of(self, _context):
-    _part_items.clear()
-    try:
-        names = sessions.parts_of_file(Path(self.filepath))
-    except OSError:
-        names = []
-    _part_items.extend((name, name, "") for name in names)
-    return _part_items
+class JBS_UL_parts(bpy.types.UIList):
+    def draw_item(self, _context, layout, data, item, _icon, _active_data, _active_property, _index):
+        row = layout.row(align=True)
+        row.enabled = not data.all_parts
+        row.prop(item, "chosen", text=item.name)
+        file = row.row()
+        file.alignment = "RIGHT"
+        file.enabled = False
+        file.label(text=Path(item.path).name)
 
 
 class JBS_OT_import_jbeam_part(bpy.types.Operator):
     bl_idname = "jbs.import_jbeam_part"
-    bl_label = "Import JBeam Part"
-    bl_description = "Show one part of a .jbeam file as a mesh"
+    bl_label = "Import JBeam Parts"
+    bl_description = "Choose the parts of the .jbeam files to import"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
-    bl_property = "part"
 
-    filepath: StringProperty(subtype="FILE_PATH", options={"HIDDEN"})
-    part: EnumProperty(name="Part", items=_part_items_of)
+    paths: StringProperty(options={"HIDDEN"}, description="The .jbeam files, one per line")
+    all_parts: BoolProperty(name="All parts", description="Import every part of the chosen files")
+    parts: CollectionProperty(type=JBS_PartChoice, options={"HIDDEN", "SKIP_SAVE"})
+    active: IntProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def _fill(self) -> None:
+        self.parts.clear()
+        for path in (Path(p) for p in self.paths.splitlines() if p.strip()):
+            try:
+                names = sessions.parts_of_file(path)
+            except OSError as error:
+                self.report({"ERROR"}, f"{path.name}: {error}")
+                continue
+            for name in names:
+                item = self.parts.add()
+                item.name, item.path = name, str(path)
 
     def invoke(self, context, _event):
-        context.window_manager.invoke_search_popup(self)
-        return {"RUNNING_MODAL"}
+        self._fill()
+        return context.window_manager.invoke_props_dialog(self, width=460)
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.prop(self, "all_parts")
+        layout.template_list("JBS_UL_parts", "", self, "parts", self, "active",
+                             rows=min(14, max(5, len(self.parts))))
+        chosen = len(self.parts) if self.all_parts else sum(p.chosen for p in self.parts)
+        layout.label(text=tr("{count} of {total} parts").format(count=chosen, total=len(self.parts)))
 
     def execute(self, context):
-        return _finish_import(self, context, "PART", Path(self.filepath), self.part)
+        if not self.parts:
+            self._fill()
+        files: dict[Path, list[str]] = {}
+        for item in self.parts:
+            if self.all_parts or item.chosen:
+                files.setdefault(Path(item.path), []).append(item.name)
+        if not files:
+            self.report({"ERROR"}, tr("Choose the parts to import"))
+            return {"CANCELLED"}
+        return _finish_import(self, context, [("PART", path, names) for path, names in files.items()])
 
 
 class JBS_OT_import_jbeam(bpy.types.Operator, ImportHelper):
     bl_idname = "jbs.import_jbeam"
-    bl_label = "Import JBeam Part"
-    bl_description = "Show one part of a .jbeam file as a mesh, with the nodes of other parts it uses"
+    bl_label = "Import JBeam Parts"
+    bl_description = ("Show parts of .jbeam files as objects, with the nodes of other parts they use; with several "
+                      "parts, choose which ones")
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ".jbeam"
     filter_glob: StringProperty(default="*.jbeam", options={"HIDDEN"})
-    part_name: StringProperty(name="Part", description="Leave empty to choose from the parts of the file")
+    files: CollectionProperty(type=bpy.types.OperatorFileListElement, options={"HIDDEN", "SKIP_SAVE"})
+    directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    part_name: StringProperty(name="Part", description="Leave empty to choose from the parts of the files")
 
     def execute(self, context):
-        path = Path(self.filepath)
-        try:
-            parts = sessions.parts_of_file(path)
-        except OSError as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        if not parts:
-            self.report({"ERROR"}, tr("{name} has no parts").format(name=path.name))
-            return {"CANCELLED"}
+        choices: list[tuple[Path, str]] = []
+        paths = _chosen_paths(self)
+        for path in paths:
+            try:
+                parts = sessions.parts_of_file(path)
+            except OSError as error:
+                self.report({"ERROR"}, f"{path.name}: {error}")
+                continue
+            if not parts:
+                self.report({"WARNING"}, tr("{name} has no parts").format(name=path.name))
+            choices += [(path, part) for part in parts]
         if self.part_name:
-            if self.part_name not in parts:
-                self.report({"ERROR"}, tr('Part "{part}" is not in {name}').format(part=self.part_name, name=path.name))
+            choices = [c for c in choices if c[1] == self.part_name]
+            if not choices:
+                self.report({"ERROR"}, tr('Part "{part}" is not in {name}').format(
+                    part=self.part_name, name=", ".join(p.name for p in paths)))
                 return {"CANCELLED"}
-            return _finish_import(self, context, "PART", path, self.part_name)
-        if len(parts) == 1:
-            return _finish_import(self, context, "PART", path, parts[0])
-        bpy.ops.jbs.import_jbeam_part("INVOKE_DEFAULT", filepath=str(path))
+        if not choices:
+            return {"CANCELLED"}
+        if len(choices) == 1 or self.part_name:
+            return _finish_import(self, context, [("PART", path, [part]) for path, part in choices])
+        bpy.ops.jbs.import_jbeam_part("INVOKE_DEFAULT", paths="\n".join(str(p) for p in paths))
         return {"FINISHED"}
 
 
@@ -1278,10 +1343,11 @@ class JBS_OT_extract_vehicles(bpy.types.Operator):
 
 def menu_import(self, _context):
     self.layout.operator(JBS_OT_import_pc.bl_idname, text="JBeam Vehicle (.pc)")
-    self.layout.operator(JBS_OT_import_jbeam.bl_idname, text="JBeam Part (.jbeam)")
+    self.layout.operator(JBS_OT_import_jbeam.bl_idname, text="JBeam Parts (.jbeam)")
 
 
 CLASSES = (
+    JBS_PartChoice, JBS_UL_parts,
     JBS_OT_import_pc, JBS_OT_import_jbeam_part, JBS_OT_import_jbeam, JBS_OT_apply_mesh, JBS_OT_save,
     JBS_OT_rebuild, JBS_OT_reload, JBS_OT_rescan, JBS_OT_load_object, JBS_OT_detach, JBS_OT_rename_node,
     JBS_OT_rename_nodes, JBS_OT_mirror, JBS_OT_add_resets, JBS_OT_fix, JBS_OT_add_extra, JBS_OT_add_rail,

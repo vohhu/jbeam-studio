@@ -15,6 +15,7 @@ from pathlib import Path
 
 import bmesh
 import bpy
+from mathutils import Vector
 
 ROOT = Path(__file__).resolve().parents[2]
 arguments = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -295,6 +296,29 @@ def steps():
         bpy.ops.object.mode_set("EXEC_DEFAULT", True, mode="OBJECT")
     yield 0.5
 
+    view_settings = bpy.context.window_manager.jbs_view
+    view_settings.labels = "ALL"
+    window_region = next(r for r in area.regions if r.type == "WINDOW")
+    with bpy.context.temp_override(**{**override, "region": window_region}):
+        bpy.ops.view3d.view_axis(type="TOP")
+        bpy.ops.view3d.view_all()
+    yield 1.0
+    region_3d = area.spaces.active.region_3d
+    engine = bpy.data.objects["car_engine_small"]
+    point = region_3d.perspective_matrix @ (engine.matrix_world @ Vector(session.edit.vehicle.nodes["e1"].pos)).to_4d()
+    x = (point.x / point.w + 1) * 0.5 * window_region.width + window_region.x
+    y = (point.y / point.w + 1) * 0.5 * window_region.height + window_region.y
+    results["steps"].append(("e1 label", x, y, window.width, window.height))
+    for label, value in (("top_hidden", False), ("top_through", True)):
+        view_settings.through_faces = value
+        for region in area.regions:
+            region.tag_redraw()
+        yield 1.0
+        if SCREENSHOT is not None:
+            with bpy.context.temp_override(**override):
+                bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + f"_{label}.png")))
+    view_settings.through_faces = False
+
     vehicles = Path(tempfile.gettempdir()) / "bng-vehicles" / "vehicles" / "pickup"
     configs = sorted(vehicles.glob("*.pc"))
     if configs:
@@ -335,6 +359,24 @@ def steps():
             bpy.ops.screen.screenshot(filepath=str(SCREENSHOT))
         results["steps"].append(("screenshot", str(SCREENSHOT)))
     yield 0.2
+    view_settings = bpy.context.window_manager.jbs_view
+    shading = area.spaces.active.shading
+    for label, change in (("through", lambda: setattr(view_settings, "through_faces", True)),
+                          ("xray", lambda: (setattr(view_settings, "through_faces", False),
+                                            setattr(shading, "show_xray", True))),
+                          ("gradient", lambda: (setattr(shading, "show_xray", False),
+                                                setattr(view_settings, "beam_color_by", "beamSpring"),
+                                                setattr(view_settings, "group_colors", True),
+                                                setattr(view_settings, "node_color_by", "nodeWeight")))):
+        change()
+        for region in area.regions:
+            region.tag_redraw()
+        yield 1.0
+        if SCREENSHOT is not None:
+            with bpy.context.temp_override(**override):
+                bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + f"_{label}.png")))
+    view_settings.beam_color_by, view_settings.group_colors = "TYPE", False
+    yield 0.2
 
     big = override["area"]
     big.type = "TEXT_EDITOR"
@@ -357,6 +399,17 @@ def steps():
     if SCREENSHOT is not None:
         with bpy.context.temp_override(window=window, area=big):
             bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + "_syntax.png")))
+    yield 0.2
+
+    big.type = "VIEW_3D"
+    with bpy.context.temp_override(window=window, area=big, region=big.regions[-1]):
+        outcome = bpy.ops.jbs.import_jbeam_part("INVOKE_DEFAULT", paths="\n".join(
+            str(car / name) for name in ("doors.jbeam", "engine.jbeam")))
+    results["steps"].append(("chooser", sorted(outcome)))
+    yield 1.0
+    if SCREENSHOT is not None:
+        with bpy.context.temp_override(window=window, area=big):
+            bpy.ops.screen.screenshot(filepath=str(SCREENSHOT.with_name(SCREENSHOT.stem + "_dialog.png")))
     yield 0.2
 
 

@@ -233,3 +233,19 @@ def test_replace_text_is_undoable(car):
     assert "b2" in session.vehicle.nodes
     with pytest.raises(EditError):
         session.replace_text(path, "{ broken")
+
+
+def test_a_file_saved_by_another_session_with_the_same_text_is_taken_as_saved(car):
+    first, second = (EditSession.for_part(car / "doors.jbeam", name)
+                     for name in ("car_door_L_stock", "car_door_L_sport"))
+    path = car / "doors.jbeam"
+    text = first.text_of(path).replace('["d2l", 0.7,', '["d2l", 0.75,', 1)
+    first.replace_text(path, text)
+    second.replace_text(path, text)
+    first.save()
+    assert second.changed_on_disk([path]) == [path.absolute()]
+    assert second.accept_disk(path)
+    assert second.dirty_files() == [] and second.changed_on_disk([path]) == []
+    assert second.base_text(path) == text and second.knows(path)
+    second.replace_text(path, text.replace("0.75", "0.8"))
+    assert not second.accept_disk(path)

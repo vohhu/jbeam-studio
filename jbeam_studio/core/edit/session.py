@@ -219,6 +219,31 @@ class EditSession:
     def dirty_files(self) -> list[Path]:
         return [p for p, text in self.texts.items() if text != self._base.get(p)]
 
+    def knows(self, path: Path) -> bool:
+        """Whether the session read the file."""
+        return Path(path).absolute() in self._base
+
+    def base_text(self, path: Path) -> str | None:
+        """The text of the file as read or last saved."""
+        return self._base.get(Path(path).absolute())
+
+    def accept_disk(self, path: Path) -> bool:
+        """Takes the file on disk as the saved state of a file whose text in the session is the same, as after
+        another session saved the same edits. Returns whether it did."""
+        path = Path(path).absolute()
+        if path not in self._base:
+            return False
+        text = self.text_of(path)
+        try:
+            if read_text(path) != text:
+                return False
+        except OSError:
+            return False
+        self._base[path] = text
+        self._base_stat[path] = self._stat(path)
+        self.texts.pop(path, None)
+        return True
+
     def changed_on_disk(self, paths: Iterable[Path] | None = None) -> list[Path]:
         """Files whose content on disk differs from the text the session read (or last saved)."""
         changed = []
