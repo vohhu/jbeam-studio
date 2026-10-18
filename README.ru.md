@@ -7,7 +7,7 @@
 
 <p align="center">
   <img alt="Blender 4.5 LTS и 5.2 LTS" src="https://img.shields.io/badge/Blender-4.5%20LTS%20%7C%205.2%20LTS-E87D0D?logo=blender&logoColor=white">
-  <img alt="Версия 0.17.0" src="https://img.shields.io/badge/version-0.17.0-2ea44f">
+  <img alt="Версия 0.17.1" src="https://img.shields.io/badge/version-0.17.1-2ea44f">
   <img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <a href="https://github.com/vohhu/jbeam-studio/actions/workflows/core-tests.yml"><img alt="Тесты" src="https://github.com/vohhu/jbeam-studio/actions/workflows/core-tests.yml/badge.svg"></a>
 </p>
@@ -77,20 +77,33 @@ Blender 4.5 LTS или 5.2 LTS.
 - **Машина (.pc)**: машина собирается так же, как в игре, со своими слотами, переменными и частями `vehicles/common`. Всё попадает в коллекцию **JBeam**: в ней коллекция на каждый `.jbeam`-файл и объект на каждую часть, у которой есть ноды, балки или грани.
 - **Части (.jbeam)**: выберите один или несколько файлов (Shift или Ctrl в файловом браузере), затем отметьте части в списке (протаскивание по флажкам отмечает несколько) или *All parts* — так пропускаются части без нод, балок и граней.
 
-  ![Выбор частей дверей ETK 800](docs/images/choose-parts.png)
+  ![Выбор частей дверей ETK 800](docs/images/choose-parts-ru.png)
 
 - Объект показывает ноды, балки и грани своей части. Ноды других частей, на которые ссылаются её балки, рисуются оранжевыми точками, и здесь их нельзя двигать или удалять. *Все ноды машины* (кнопка рядом с именем части) показывает все ноды машины, чтобы соединять новые балки с любыми из них.
+
+  ![Передняя дверь, импортированная отдельно: ноды кузова, к которым она крепится, оранжевые](docs/images/part-ghosts-ru.png)
 - Всё, что добавлено в объекте, попадает в его часть, а правка одной части сразу видна в остальных.
 
 ### Правка в режиме редактирования
 
-![Правка передней двери ETK 800: выделенные ноды, их масса и центр масс](docs/images/edit-mode.png)
+![Правка передней двери ETK 800: выделенные ноды, их масса и центр масс](docs/images/edit-mode-ru.png)
 
 - Вершины — ноды, рёбра — балки, грани с тремя или четырьмя углами — треугольники и квады. Рёбра, которые только стороны граней, балками не являются.
 - Каждый инструмент применяется, когда заканчивает работу (*Правка › Применять сразу*); при выходе из режима редактирования меш перестраивается по файлам.
 - *Правка › Перемещение нод*: **Перезаписывать координаты** (по умолчанию) пишет простые числа; **Сохранять выражения** оставляет `$переменные` и выражения `$=` и прибавляет к ним сдвиг.
 - Подразделение грани заменяет её строку строками новых граней, которые сохраняют её свойства; соседние грани, которым Blender добавляет точку на ребре, остаются как были.
 - Несколько частей, открытых для правки вместе, применяются вместе.
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Панели «Текстовый редактор», «Редактирование» и «Инструменты»" src="docs/images/panels-editing-ru.png"></td>
+    <td width="50%"><img alt="Панели «Группы», «Гидравлика и рельсы» и «Диагностика»" src="docs/images/panels-lists-ru.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><i>Текстовый редактор</i>, <i>Редактирование</i> и <i>Инструменты</i></td>
+    <td align="center"><i>Группы</i>, <i>Гидравлика и рельсы</i> и <i>Диагностика</i></td>
+  </tr>
+</table>
 
 ### Новые ноды и строки
 
@@ -122,7 +135,7 @@ Blender 4.5 LTS или 5.2 LTS.
 
 ### Текстовый редактор
 
-![Строки выделенных балок подсвечены в текстовом редакторе Blender](docs/images/text-editor.png)
+![Строки выделенных балок подсвечены в текстовом редакторе Blender](docs/images/text-editor-ru.png)
 
 *Текстовый редактор › Показать текст* открывает файл активной части в текстовом редакторе Blender.
 
@@ -133,7 +146,7 @@ Blender 4.5 LTS или 5.2 LTS.
 
 ### Отображение
 
-<img align="right" width="380" alt="Настройки отображения JBeam в шапке вьюпорта" src="docs/images/display-settings.png">
+<img align="right" width="380" alt="Настройки отображения JBeam в шапке вьюпорта" src="docs/images/display-settings-ru.png">
 
 Всё, что рисуется поверх объектов, настраивается в разделе **Отображение** (в боковой панели) и по кнопке **JBeam** в шапке 3D-вьюпорта. Настройки сохраняются между запусками Blender; кнопка со стрелкой возвращает значения по умолчанию.
 
@@ -158,6 +171,75 @@ Blender 4.5 LTS или 5.2 LTS.
 | неизвестный тип, проблемы | ![](https://img.shields.io/badge/-255,0,0-FF0000) | рельсы | у каждого свой цвет из палитры jet игры |
 | значения | от белого ![](https://img.shields.io/badge/-мало-FFFFFF) к красному ![](https://img.shields.io/badge/-много-FF0000), `FLT_MAX` ![](https://img.shields.io/badge/-255,0,255-FF00FF) | имена нод, центр масс | ![](https://img.shields.io/badge/-255,0,255-FF00FF), ![](https://img.shields.io/badge/-255,0,0-FF0000) |
 
+#### Как выглядят настройки
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Балки по типу, грани скрывают то, что за ними" src="docs/images/beam-types.png"></td>
+    <td width="50%"><img alt="Балки по типу сквозь грани" src="docs/images/beam-types-through.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Балки по типу; грани скрывают то, что за ними</td>
+    <td align="center">То же со <i>Сквозь грани</i></td>
+  </tr>
+  <tr>
+    <td><img alt="beamSpring по градиенту BeamNG" src="docs/images/beam-spring.png"></td>
+    <td><img alt="beamDeform по радуге" src="docs/images/beam-deform-rainbow.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>beamSpring</code>, градиент BeamNG (от белого к красному)</td>
+    <td align="center"><code>beamDeform</code>, радуга</td>
+  </tr>
+  <tr>
+    <td><img alt="beamStrength по viridis, FLT_MAX пурпурным" src="docs/images/beam-strength-viridis.png"></td>
+    <td><img alt="Балки по группам поломки" src="docs/images/break-groups.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>beamStrength</code>, viridis; <code>FLT_MAX</code> пурпурным</td>
+    <td align="center">Свой цвет у каждой <code>breakGroup</code></td>
+  </tr>
+  <tr>
+    <td><img alt="Балки по группам деформации" src="docs/images/deform-groups.png"></td>
+    <td><img alt="Балки по частям" src="docs/images/beams-by-part.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Свой цвет у каждой <code>deformGroup</code></td>
+    <td align="center">Свой цвет у каждой части</td>
+  </tr>
+  <tr>
+    <td><img alt="Ноды по флагам" src="docs/images/nodes-flags.png"></td>
+    <td><img alt="Ноды по группам" src="docs/images/nodes-groups.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Ноды по флагам, как в игре</td>
+    <td align="center">Ноды по группам</td>
+  </tr>
+  <tr>
+    <td><img alt="Ноды по nodeWeight" src="docs/images/nodes-weight.png"></td>
+    <td><img alt="Имена нод переднего бампера" src="docs/images/names.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Ноды по <code>nodeWeight</code></td>
+    <td align="center"><i>Имена нод › Все</i> у активной части, остальные приглушены</td>
+  </tr>
+  <tr>
+    <td><img alt="Гидравлика, торсионы и рельсы" src="docs/images/hydros-rails.png"></td>
+    <td><img alt="В цвете только активная часть, остальные приглушены" src="docs/images/dimmed.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Гидравлика, торсионы (две половины и ось) и рельсы</td>
+    <td align="center"><i>Показывать на › Активный</i>: капот, остальное приглушено</td>
+  </tr>
+  <tr>
+    <td><img alt="В цвете только активная часть, остальные скрыты" src="docs/images/active-only.png"></td>
+    <td><img alt="Остальные разделы настроек отображения JBeam" src="docs/images/display-settings-more-ru.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><i>Показывать на › Активный</i> без <i>Приглушать остальные</i></td>
+    <td align="center">Гидравлика и рельсы, Выделение и проблемы, Имена нод, Центр масс</td>
+  </tr>
+</table>
+
 ### Диагностика
 
 **Диагностика** перечисляет проблемы, найденные при сборке машины, с файлом и строкой (кнопка с текстом открывает их). Кнопки над списком исправляют все проблемы одного вида за один шаг отмены:
@@ -173,6 +255,8 @@ Blender 4.5 LTS или 5.2 LTS.
 - Части, импортированные по отдельности из одних и тех же файлов, обмениваются правками: остальные части забирают правку, когда правка затихает (те, что показывают изменённое), или перед собственной правкой, объединяя её со своими правками построчно.
 - Машина, импортированная по частям, не тормозит: перемещение ноды с Auto занимает доли секунды, а вращение камеры только рисует то, что уже лежит на видеокарте.
 - Часть, импортированная отдельно, видит только свои ноды и ноды, которые использует, поэтому новая нода может получить имя, которое уже есть у другой импортированной части, например `d16l` передней двери, когда задняя дверь использует `d16l`. Тогда панель говорит, какие ноды и части совпали, а ноды отмечаются красным. Части одного типа слота, например два варианта одной двери, — альтернативы и не считаются.
+
+  ![Нода задней двери названа как нода передней: предупреждение в панели и нода красным](docs/images/conflict-ru.png)
 
 ## Решение проблем
 
@@ -202,8 +286,11 @@ python -m pytest                                                   # ядро
 blender -b --factory-startup --python tests/blender/run.py         # Blender (pytest из .blender-pytest)
 $env:JBS_VEHICLES_DIR = "<распаковано>/vehicles"; python -m pytest tests/corpus
 ./scripts/build.ps1                                                # dist/jbeam_studio-<версия>.zip
-blender --factory-startup --python scripts/screenshots.py -- <распаковано>/vehicles docs/images viewport
+blender --factory-startup --enable-event-simulate --python scripts/screenshots.py -- <распаковано>/vehicles docs/images viewport
+python scripts/shrink_images.py                                    # 256 цветов, втрое меньше
 ```
+
+`screenshots.py` снимает за запуск один набор картинок (`viewport`, `editing`, `parts`, `popover`, `popover-more`, `panels-editing`, `panels-lists`, `dialog`); с `ru` — с русским интерфейсом.
 
 Pytest для Python внутри Blender ставится в `.blender-pytest`: `python -m pip install --target .blender-pytest pytest`. См. [CONTRIBUTING.md](CONTRIBUTING.md) и [историю изменений](CHANGELOG.ru.md).
 

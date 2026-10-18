@@ -7,7 +7,7 @@
 
 <p align="center">
   <img alt="Blender 4.5 LTS and 5.2 LTS" src="https://img.shields.io/badge/Blender-4.5%20LTS%20%7C%205.2%20LTS-E87D0D?logo=blender&logoColor=white">
-  <img alt="Version 0.17.0" src="https://img.shields.io/badge/version-0.17.0-2ea44f">
+  <img alt="Version 0.17.1" src="https://img.shields.io/badge/version-0.17.1-2ea44f">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue">
   <a href="https://github.com/vohhu/jbeam-studio/actions/workflows/core-tests.yml"><img alt="Tests" src="https://github.com/vohhu/jbeam-studio/actions/workflows/core-tests.yml/badge.svg"></a>
 </p>
@@ -80,6 +80,8 @@ Blender 4.5 LTS or 5.2 LTS.
   ![Choosing the parts of the ETK 800 doors](docs/images/choose-parts.png)
 
 - An object shows the nodes, beams and faces of its part. Nodes of other parts that its beams use are drawn as orange points and cannot be moved or deleted there. *All vehicle nodes* (the button next to the part's name) shows every node of the vehicle, to join new beams to any of them.
+
+  ![The front door imported on its own: the nodes of the body it is fixed to are orange](docs/images/part-ghosts.png)
 - Whatever you add in an object goes to its part, and an edit in one part shows up in the others right away.
 
 ### Editing in Edit Mode
@@ -91,6 +93,17 @@ Blender 4.5 LTS or 5.2 LTS.
 - *Editing › Moving nodes*: **Overwrite coordinates** (default) writes plain numbers; **Keep expressions** keeps `$variables` and `$=` expressions and adds the shift to them.
 - Subdividing a face replaces its row with the rows of the new faces, which keep its properties; the faces around it, which Blender gives a point on their edge, stay as they were.
 - Several parts in Edit Mode together are applied together.
+
+<table>
+  <tr>
+    <td width="50%"><img alt="The Text Editor, Editing and Tools panels" src="docs/images/panels-editing.png"></td>
+    <td width="50%"><img alt="The Groups, Hydros and Rails and Diagnostics panels" src="docs/images/panels-lists.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><i>Text Editor</i>, <i>Editing</i> and <i>Tools</i></td>
+    <td align="center"><i>Groups</i>, <i>Hydros and Rails</i> and <i>Diagnostics</i></td>
+  </tr>
+</table>
 
 ### New nodes and rows
 
@@ -158,6 +171,75 @@ The default colours are those of the game's debug view (`lua/vehicle/bdebugImpl.
 | unknown type, problems | ![](https://img.shields.io/badge/-255,0,0-FF0000) | rails | a colour for each, from the game's jet palette |
 | values | white ![](https://img.shields.io/badge/-low-FFFFFF) to red ![](https://img.shields.io/badge/-high-FF0000), `FLT_MAX` ![](https://img.shields.io/badge/-255,0,255-FF00FF) | node names, centre of mass | ![](https://img.shields.io/badge/-255,0,255-FF00FF), ![](https://img.shields.io/badge/-255,0,0-FF0000) |
 
+#### What the settings look like
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Beams by type, faces hide what is behind them" src="docs/images/beam-types.png"></td>
+    <td width="50%"><img alt="Beams by type through faces" src="docs/images/beam-types-through.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Beams by type; faces hide what is behind them</td>
+    <td align="center">The same with <i>Through faces</i></td>
+  </tr>
+  <tr>
+    <td><img alt="beamSpring on the BeamNG gradient" src="docs/images/beam-spring.png"></td>
+    <td><img alt="beamDeform on the rainbow gradient" src="docs/images/beam-deform-rainbow.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>beamSpring</code>, BeamNG gradient (white to red)</td>
+    <td align="center"><code>beamDeform</code>, rainbow gradient</td>
+  </tr>
+  <tr>
+    <td><img alt="beamStrength on the viridis gradient, FLT_MAX in magenta" src="docs/images/beam-strength-viridis.png"></td>
+    <td><img alt="Beams by break group" src="docs/images/break-groups.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>beamStrength</code>, viridis; <code>FLT_MAX</code> in magenta</td>
+    <td align="center">A colour for each <code>breakGroup</code></td>
+  </tr>
+  <tr>
+    <td><img alt="Beams by deform group" src="docs/images/deform-groups.png"></td>
+    <td><img alt="Beams by part" src="docs/images/beams-by-part.png"></td>
+  </tr>
+  <tr>
+    <td align="center">A colour for each <code>deformGroup</code></td>
+    <td align="center">A colour for each part</td>
+  </tr>
+  <tr>
+    <td><img alt="Nodes by flags" src="docs/images/nodes-flags.png"></td>
+    <td><img alt="Nodes by group" src="docs/images/nodes-groups.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Nodes by flags, as in the game</td>
+    <td align="center">Nodes by group</td>
+  </tr>
+  <tr>
+    <td><img alt="Nodes by nodeWeight" src="docs/images/nodes-weight.png"></td>
+    <td><img alt="Node names of the front bumper" src="docs/images/names.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Nodes by <code>nodeWeight</code></td>
+    <td align="center"><i>Node Names › All</i> on the active part, the others dimmed</td>
+  </tr>
+  <tr>
+    <td><img alt="Hydros, torsion bars and rails" src="docs/images/hydros-rails.png"></td>
+    <td><img alt="Only the active part in colour, the others dimmed" src="docs/images/dimmed.png"></td>
+  </tr>
+  <tr>
+    <td align="center">Hydros, torsion bars (two halves and the axis) and rails</td>
+    <td align="center"><i>Show on › Active</i>: the hood, the others dimmed</td>
+  </tr>
+  <tr>
+    <td><img alt="Only the active part in colour, the others hidden" src="docs/images/active-only.png"></td>
+    <td><img alt="The other sections of the JBeam display settings" src="docs/images/display-settings-more.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><i>Show on › Active</i> without <i>Dim the others</i></td>
+    <td align="center">Hydros and Rails, Selection and Problems, Node Names, Centre of Mass</td>
+  </tr>
+</table>
+
 ### Diagnostics
 
 **Diagnostics** lists the problems found while assembling the vehicle, with their file and line (the text button opens them). Buttons above the list fix all problems of a kind as one undo step:
@@ -173,6 +255,8 @@ With *Display › Selection and Problems › Problems*, repeated beams, flat tri
 - Parts imported on their own from the same files share their edits: the other parts take an edit when editing pauses (those that show what changed) or before they are edited themselves, joining it line by line with their own edits.
 - A whole vehicle imported part by part stays smooth: moving a node with Auto takes a fraction of a second, and moving the view only draws what is kept on the GPU.
 - Parts imported on their own only see their own nodes and the nodes they use, so a new node can get a name that another imported part already has, for example `d16l` of the front door when the rear door uses `d16l`. The panel then says which nodes and parts, and the nodes are marked in red. Parts of the same slot type, such as two variants of one door, are alternatives and do not count.
+
+  ![A node of the rear door named like a node of the front door: the warning in the panel and the node in red](docs/images/conflict.png)
 
 ## Troubleshooting
 
@@ -202,8 +286,11 @@ python -m pytest                                                   # core
 blender -b --factory-startup --python tests/blender/run.py         # Blender (pytest from .blender-pytest)
 $env:JBS_VEHICLES_DIR = "<unpacked>/vehicles"; python -m pytest tests/corpus
 ./scripts/build.ps1                                                # dist/jbeam_studio-<version>.zip
-blender --factory-startup --python scripts/screenshots.py -- <unpacked>/vehicles docs/images viewport
+blender --factory-startup --enable-event-simulate --python scripts/screenshots.py -- <unpacked>/vehicles docs/images viewport
+python scripts/shrink_images.py                                    # 256 colours, a third of the size
 ```
+
+`screenshots.py` takes one set of pictures per run (`viewport`, `editing`, `parts`, `popover`, `popover-more`, `panels-editing`, `panels-lists`, `dialog`); add `ru` for the Russian interface.
 
 Pytest for Blender's Python goes into `.blender-pytest`: `python -m pip install --target .blender-pytest pytest`. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [changelog](CHANGELOG.md).
 

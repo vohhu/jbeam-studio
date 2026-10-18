@@ -4,6 +4,11 @@
 
 Versions 0.1–0.12 were released in the archived repository `vohhu/jbeam-studio-old`.
 
+## 0.17.1
+
+- The warning about nodes that other parts in the scene already have is clearer and fits the panel.
+- The README shows every display setting: beams by type, through faces or not, every gradient, break and deform groups, parts, nodes by flags, group and weight, node names, hydros, torsion bars and rails, dimmed and hidden parts, the popover, the panels, a part with the nodes of other parts and the warning about shared node names; the Russian README with the Russian interface.
+
 ## 0.17.0
 
 - The default colours are those of the game's debug view: beam types (`|NORMAL` green, `|SUPPORT` magenta, `|BOUNDED` yellow, `|ANISOTROPIC` orange, `|LBEAM` grey, `|PRESSURED` cyan), nodes by their flags (`fixed`, `selfCollision`, `collision: false`), hydros blue, torsion bars as two triangles with an orange axis, a colour for each rail with its slide nodes, break and deform groups in the game's contrast colours, values from white to red with `FLT_MAX` in magenta, node names in magenta and a red centre of mass.

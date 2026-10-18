@@ -136,9 +136,8 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
             alert.alert = True
             parts = sorted({part for names in conflicts.values() for part in names})
             shown = ", ".join(sorted(conflicts)[:8]) + (" \u2026" if len(conflicts) > 8 else "")
-            wrapped(alert, tr("{count} nodes of this part already exist in other parts in the scene ({parts}): "
-                              "{nodes}").format(count=len(conflicts), parts=", ".join(parts[:3]), nodes=shown),
-                    icon="ERROR")
+            wrapped(alert, tr("Other parts in the scene ({parts}) already have nodes of this part: {nodes}").format(
+                parts=", ".join(parts[:3]), nodes=shown), width=38, icon="ERROR")
 
         row = layout.row(align=True)
         row.operator("jbs.apply_mesh", icon="CHECKMARK")
