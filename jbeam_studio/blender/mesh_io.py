@@ -162,6 +162,7 @@ def write_edit_mesh(obj, data: MeshData, rev: int, selected: set[int] = frozense
     for edge in bm.edges:
         if edge[edge_layer] == 0:
             edge[edge_layer] = FACE_EDGE
+    bm.normal_update()
     bm.select_flush(True)
     bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=True)
     obj.data[REV] = rev
@@ -201,6 +202,7 @@ def stamp(obj, link, plan, new_ids) -> None:
     faces = {frozenset(g.nodes): g.uid for g in uid_map.faces.values()}
     for face in bm.faces:
         face[face_layer] = faces.get(frozenset(v[uid_layer] for v in face.verts), 0)
+    bm.normal_update()
     bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
     obj.data[REV] = rev
 

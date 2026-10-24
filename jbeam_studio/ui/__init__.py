@@ -16,9 +16,11 @@ def register() -> None:
     text_syntax.register()
     text_highlight.register()
     bpy.app.translations.register(__package__, translations.translations())
+    operators.register_keymaps()
 
 
 def unregister() -> None:
+    operators.unregister_keymaps()
     bpy.app.translations.unregister(__package__)
     text_highlight.unregister()
     text_syntax.unregister()

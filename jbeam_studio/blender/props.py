@@ -44,6 +44,19 @@ def _search_groups(self, context, edit_text):
     return [name for name in found if text in name.lower()]
 
 
+def _place_at_cursor_changed(self, _context) -> None:
+    if self.place_at_cursor and self.placement != "cursor":
+        self.placement = "cursor"
+    elif not self.place_at_cursor and self.placement == "cursor":
+        self.placement = "end"
+
+
+def _placement_changed(self, _context) -> None:
+    is_cursor = self.placement == "cursor"
+    if self.place_at_cursor != is_cursor:
+        self.place_at_cursor = is_cursor
+
+
 def _search_parts(self, context, edit_text):
     session = sessions.SESSIONS.get(self.session_key)
     if session is None:
@@ -81,13 +94,21 @@ class JBS_ObjectSettings(bpy.types.PropertyGroup):
     )
     node_prefix: StringProperty(name="New node prefix", default="n",
                                 description="New nodes without neighbours are named with this prefix and a number")
+    place_at_cursor: BoolProperty(
+        name="At text cursor",
+        description="Place new nodes, beams and faces right where the cursor is in the text editor",
+        default=False,
+        update=_place_at_cursor_changed,
+    )
     placement: EnumProperty(
         name="Where new rows go",
         items=[("end", "End of table", "After the last row and the resets, with the default values"),
                ("source", "Next to the source",
                 "Right after the row of the node, beam or face they come from, with its group and values"),
-               ("group", "Into a group", "At the end of the rows of the chosen node group, with its values")],
+               ("group", "Into a group", "At the end of the rows of the chosen node group, with its values"),
+               ("cursor", "At text cursor", "Place new rows right where the cursor is in the text editor")],
         default="end",
+        update=_placement_changed,
     )
     new_group: StringProperty(name="Group", search=_search_groups,
                               description="Node group that new nodes, and beams and faces between its nodes, join")

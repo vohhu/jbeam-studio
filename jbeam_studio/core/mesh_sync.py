@@ -16,11 +16,79 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 from .edit import EditError, EditSession
+import os
+from pathlib import Path
 from .edit.session import Change, NewBlock
+from .edit.references import part_object, section_node
+from .sjson import Kind, Node
 
 PLACE_END = "end"
 PLACE_SOURCE = "source"
 PLACE_GROUP = "group"
+PLACE_CURSOR = "cursor"
+
+
+def path_key(path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def find_cursor_target(session: EditSession, path: Path, line: int, col: int) -> tuple[str | None, str | None, int | None]:
+    norm = path_key(path)
+    target_path = next((p for p in session.texts if path_key(p) == norm), None)
+    if target_path is None:
+        for part in session.vehicle.parts.values():
+            if path_key(part.file.doc.path) == norm:
+                target_path = Path(part.file.doc.path)
+                break
+    if target_path is None:
+        return None, None, None
+
+    text = session.text_of(target_path)
+    starts = [0] + [m.end() for m in re.finditer(r"\n", text)]
+    if line >= len(starts):
+        offset = len(text)
+    else:
+        line_len = (starts[line + 1] - starts[line]) if line + 1 < len(starts) else len(text) - starts[line]
+        offset = starts[line] + min(col, line_len)
+
+    vehicle = session.vehicle
+    parts = [(name, p) for name, p in vehicle.parts.items() if path_key(p.file.doc.path) == norm]
+    if not parts:
+        return None, None, None
+
+    target_part_name = None
+    target_part = None
+    target_obj = None
+
+    for name, p in parts:
+        obj = part_object(p.file.doc, name)
+        if obj is not None and obj.start <= offset <= obj.end:
+            target_part_name = name
+            target_part = p
+            target_obj = obj
+            break
+
+    if target_obj is None and len(parts) == 1:
+        target_part_name, target_part = parts[0]
+        target_obj = part_object(target_part.file.doc, target_part_name)
+
+    if target_obj is None:
+        return None, None, None
+
+    for member in target_obj.members:
+        sec_name = member.key
+        table = member.value
+        m_start = member.key_start
+        m_line_start = text.rfind("\n", 0, m_start) + 1
+        m_end = table.end
+        if m_line_start <= offset <= m_end:
+            if table.kind is Kind.ARRAY:
+                candidates = [i for i, it in enumerate(table.items) if it.start <= offset]
+                anchor_idx = candidates[-1] if candidates else 0
+                return target_part_name, sec_name, anchor_idx
+            return target_part_name, sec_name, None
+
+    return target_part_name, None, None
 
 MOVE_EPSILON = 5e-5
 """Smallest change of a vertex position taken as a move; meshes keep coordinates as 32-bit floats."""
@@ -226,6 +294,7 @@ class MeshLink:
         self._maps: OrderedDict[int, UidMap] = OrderedDict()
         self._vehicles: OrderedDict[int, object] = OrderedDict()
         self._parts_cache: tuple | None = None
+        self.last_cursor_warning: str | None = None
         self._current = self.rev
         self._maps[self._current] = self._derive(None, {})
         self._remember()
@@ -598,7 +667,8 @@ class MeshLink:
 
     def apply(self, plan: SyncPlan, part_name: str | None, prefix: str = "n", allow_shared: bool = False,
               auto_names: bool = False, placement: str = PLACE_END, group: str | None = None,
-              prefer: int | None = None) -> dict[int, str]:
+              prefer: int | None = None, keep_dependents: bool = False,
+              cursor_target: tuple[str | None, str | None, int | None] | None = None) -> dict[int, str]:
         """Runs a plan as one change and returns the ids given to new nodes, by vertex index.
 
         With `auto_names` new nodes are named after the nodes they came from, otherwise with the prefix.
@@ -641,20 +711,44 @@ class MeshLink:
                     raise EditError("the faces changed while flipping them")
             entries = own([vehicle.beams[i] for uid in plan.deleted_beams for i in uid_map.beams[uid].indices])
             entries += own([faces[i] for uid in plan.deleted_faces for i in uid_map.faces[uid].indices])
+            if keep_dependents and plan.deleted_nodes:
+                deleted_node_set = set(plan.deleted_nodes)
+                entries = [e for e in entries if not (
+                    (hasattr(e, "id1") and {e.id1, e.id2} & deleted_node_set) or
+                    (hasattr(e, "ids") and set(e.ids) & deleted_node_set)
+                )]
             if entries:
                 session.delete_entries(entries, allow_shared)
             if plan.deleted_nodes:
-                session.delete_nodes(plan.deleted_nodes, cascade=True, allow_shared=allow_shared)
+                session.delete_nodes(plan.deleted_nodes, cascade=not keep_dependents,
+                                     allow_shared=allow_shared, keep_dependents=keep_dependents)
             if plan.moves:
                 session.move_nodes(plan.moves, allow_shared)
+            nodes_placed_at_cursor = False
+            beams_placed_at_cursor = False
+            faces_placed_at_cursor = False
+            cur_part, cur_sec, anchor_idx = cursor_target if cursor_target else (None, None, None)
+
             if plan.new_nodes:
                 vertices = list(plan.new_nodes)
                 names = dict(zip(vertices, self.new_names(plan, vertices, prefix))) if auto_names else None
                 for part, chunk in by_part(vertices, [node_parts[v] for v in vertices]):
+                    anchors = None
+                    if placement == PLACE_CURSOR:
+                        if cur_part == part and cur_sec == "nodes" and anchor_idx is not None:
+                            part_doc = session.vehicle.parts[part].file.doc
+                            p_obj = part_object(part_doc, part)
+                            tbl = section_node(p_obj, "nodes") if p_obj else None
+                            if tbl and tbl.items:
+                                clamped_idx = min(anchor_idx, len(tbl.items) - 1)
+                                anchors = [tbl.items[clamped_idx]] * len(chunk)
+                                nodes_placed_at_cursor = True
+                    else:
+                        anchors = self._node_anchors(plan, chunk, part, placement, group)
                     ids = session.add_nodes(part, [plan.new_nodes[v] for v in chunk],
                                             node_ids=[names[v] for v in chunk] if names else None,
                                             prefix=prefix, allow_shared=allow_shared,
-                                            anchors=self._node_anchors(plan, chunk, part, placement, group))
+                                            anchors=anchors)
                     new_ids.update(zip(chunk, ids))
             origins = {new_ids[v]: self._root(plan, v) for v in new_ids}
             preferred = plan.vertex_nodes.get(prefer) or new_ids.get(prefer)
@@ -662,12 +756,58 @@ class MeshLink:
                                                    ("faces", plan.new_faces, plan.new_face_sources, face_parts)):
                 for part, chunk in by_part(list(enumerate(links)), parts):
                     resolved = [tuple(map(resolve, link)) for _, link in chunk]
-                    anchors = self._link_anchors(section, part, resolved, [sources.get(i) for i, _ in chunk],
-                                                 placement, group, preferred, origins)
+                    anchors = None
+                    if placement == PLACE_CURSOR:
+                        match_sec = (cur_sec == "beams") if section == "beams" else (cur_sec in ("triangles", "quads"))
+                        if cur_part == part and match_sec and anchor_idx is not None:
+                            part_doc = session.vehicle.parts[part].file.doc
+                            p_obj = part_object(part_doc, part)
+                            target_sec = cur_sec if section != "beams" else "beams"
+                            tbl = section_node(p_obj, target_sec) if p_obj else None
+                            if tbl and tbl.items:
+                                clamped_idx = min(anchor_idx, len(tbl.items) - 1)
+                                anchors = [tbl.items[clamped_idx]] * len(chunk)
+                                if section == "beams":
+                                    beams_placed_at_cursor = True
+                                else:
+                                    faces_placed_at_cursor = True
+                    else:
+                        anchors = self._link_anchors(section, part, resolved, [sources.get(i) for i, _ in chunk],
+                                                     placement, group, preferred, origins)
                     if section == "beams":
                         session.add_beams(part, resolved, allow_shared, anchors)
                     else:
                         session.add_faces(part, resolved, allow_shared, anchors)
+
+        self.last_cursor_warning = None
+        if placement == PLACE_CURSOR:
+            has_n = bool(plan.new_nodes)
+            has_b = bool(plan.new_beams)
+            has_f = bool(plan.new_faces)
+            if has_n or has_b or has_f:
+                if cur_sec is None:
+                    self.last_cursor_warning = "Cursor is not inside a table; new rows placed at the end"
+                elif cur_part != part_name and part_name is not None and cur_part is not None:
+                    self.last_cursor_warning = (f"Cursor is in part '{cur_part}', but active part is '{part_name}': "
+                                                f"placed rows at end of '{part_name}'")
+                else:
+                    placed_all = (not has_n or nodes_placed_at_cursor) and \
+                                 (not has_b or beams_placed_at_cursor) and \
+                                 (not has_f or faces_placed_at_cursor)
+                    if not placed_all:
+                        if has_n and nodes_placed_at_cursor and has_b and not beams_placed_at_cursor:
+                            self.last_cursor_warning = "Cursor is in 'nodes': nodes placed at cursor, but beams placed at end of 'beams'"
+                        elif has_b and beams_placed_at_cursor and has_n and not nodes_placed_at_cursor:
+                            self.last_cursor_warning = "Cursor is in 'beams': beams placed at cursor, but nodes placed at end of 'nodes'"
+                        elif has_n and not nodes_placed_at_cursor and not has_b and not has_f:
+                            self.last_cursor_warning = f"Cursor is in '{cur_sec}', but adding nodes: placed at end of 'nodes'"
+                        elif has_b and not beams_placed_at_cursor and not has_n and not has_f:
+                            self.last_cursor_warning = f"Cursor is in '{cur_sec}', but adding beams: placed at end of 'beams'"
+                        elif has_f and not faces_placed_at_cursor and not has_n and not has_b:
+                            self.last_cursor_warning = f"Cursor is in '{cur_sec}', but adding faces: placed at end of 'triangles'"
+                        else:
+                            self.last_cursor_warning = f"Cursor is in '{cur_sec}': some elements could not be placed at cursor and were placed at the end"
+
         self.changed()
         return new_ids
 

@@ -8,9 +8,20 @@ import bpy
 from bpy.app.handlers import persistent
 
 from ..core.edit import EditError
-from . import mesh_io, sessions
+from . import mesh_io, selection, sessions
 
 WATCH_INTERVAL = 2.0
+TEXT_WATCH_INTERVAL = 0.1
+
+
+def watch_texts() -> float:
+    try:
+        if sessions.auto_save_enabled():
+            if sessions.check_auto_apply_texts():
+                redraw()
+    except Exception:
+        traceback.print_exc()
+    return TEXT_WATCH_INTERVAL
 LIVE_DELAY = 0.3
 """Pause after the last change of an edit mesh before its edits are applied."""
 MODAL_WAIT = 5.0
@@ -147,13 +158,18 @@ def _geometry_changed(depsgraph, obj) -> bool:
 def on_depsgraph_update(_scene, depsgraph) -> None:
     if _restoring:
         return
+    has_edit = False
     for obj, session in sessions.jbeam_objects():
         mode = obj.mode
+        if mode == "EDIT":
+            has_edit = True
         if session.mode == "EDIT" and mode != "EDIT" and obj.jbs.apply_on_exit:
             apply_later(session.key, session.part_name)
         elif mode == "EDIT" and obj.jbs.live_apply and _geometry_changed(depsgraph, obj):
             apply_live_later(session.key)
         session.mode = mode
+    if has_edit:
+        selection.schedule_check()
 
 
 @persistent
@@ -168,6 +184,7 @@ def on_undo_post(*_args) -> None:
     parts of a vehicle, a part in Edit Mode, or else the active object, leads, and the others follow it."""
     global _restoring
     try:
+        selection.clear_cache()
         active = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
         objects = sessions.jbeam_objects()
         for group in list(sessions.SESSIONS.values()):
@@ -193,6 +210,7 @@ def on_undo_post(*_args) -> None:
 
 @persistent
 def on_load_pre(*_args) -> None:
+    selection.clear_cache()
     sessions.SESSIONS.clear()
 
 
@@ -239,9 +257,13 @@ def register() -> None:
             handlers.append(function)
     if not bpy.app.timers.is_registered(watch):
         bpy.app.timers.register(watch, first_interval=WATCH_INTERVAL, persistent=True)
+    if not bpy.app.timers.is_registered(watch_texts):
+        bpy.app.timers.register(watch_texts, first_interval=TEXT_WATCH_INTERVAL, persistent=True)
 
 
 def unregister() -> None:
+    if bpy.app.timers.is_registered(watch_texts):
+        bpy.app.timers.unregister(watch_texts)
     if bpy.app.timers.is_registered(watch):
         bpy.app.timers.unregister(watch)
     for handlers, function in HANDLERS:

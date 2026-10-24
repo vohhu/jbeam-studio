@@ -114,6 +114,12 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
             alert = layout.box()
             alert.alert = True
             wrapped(alert, tr("Mesh edits were not applied") + ": " + session.error, icon="ERROR")
+        if session.cursor_warning:
+            alert = layout.box()
+            alert.alert = True
+            row = alert.row()
+            wrapped(row, tr(session.cursor_warning), icon="QUESTION")
+            row.operator("jbs.dismiss_cursor_warning", text="", icon="X")
         if obj.mode == "EDIT":
             if settings.live_apply:
                 layout.label(text="Edits are applied right away", icon="INFO")
@@ -131,18 +137,25 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
         for note in list(session.edit.notes)[:3]:
             wrapped(layout, note.message, icon="INFO")
 
-        row = layout.row(align=True)
-        row.operator("jbs.apply_mesh", icon="CHECKMARK")
+        box_actions = layout.box()
+        col = box_actions.column(align=True)
+        row = col.row(align=True)
+        row.scale_y = 1.15
+        row.operator("jbs.apply_mesh", text="Apply", icon="CHECKMARK")
         row.operator("jbs.save", text="Save", icon="FILE_TICK")
+
+        row = col.row(align=True)
         owner, name = sessions.auto_save_owner()
-        row.prop(owner, name, text="Auto", icon="AUTO", toggle=True)
-        for text in sessions.edited_texts(session):
-            box = layout.box()
-            box.alert = True
-            wrapped(box, tr("Text edits in {name} are not applied yet").format(name=text.name), icon="TEXT")
-            row = box.row(align=True)
-            row.operator("jbs.apply_text", text="Apply", icon="CHECKMARK").text_name = text.name
-            row.operator("jbs.discard_text", text="Discard", icon="X").text_name = text.name
+        row.prop(owner, name, text="Auto Save", icon="AUTO", toggle=True)
+        row.prop(settings, "place_at_cursor", text="At Cursor", icon="TEXT", toggle=True)
+        if not sessions.auto_save_enabled():
+            for text in sessions.edited_texts(session):
+                box = layout.box()
+                box.alert = True
+                wrapped(box, tr("Text edits in {name} are not applied yet").format(name=text.name), icon="TEXT")
+                row = box.row(align=True)
+                row.operator("jbs.apply_text", text="Apply", icon="CHECKMARK").text_name = text.name
+                row.operator("jbs.discard_text", text="Discard", icon="X").text_name = text.name
         if sessions.auto_save_enabled() and session.save_error:
             alert = layout.box()
             alert.alert = True
@@ -165,8 +178,8 @@ class JBS_PT_main(_Panel, bpy.types.Panel):
             row.operator("jbs.reload", icon="FILE_REFRESH")
             row.operator("jbs.save", text="Save Anyway").overwrite = True
         row = layout.row(align=True)
-        row.operator("jbs.rebuild", icon="FILE_REFRESH")
-        row.operator("jbs.rescan", icon="VIEWZOOM")
+        row.operator("jbs.rebuild", text="Rebuild", icon="FILE_REFRESH")
+        row.operator("jbs.rescan", text="Find Files", icon="VIEWZOOM")
 
 
 class JBS_PT_settings(_SessionPanel, bpy.types.Panel):
@@ -178,16 +191,28 @@ class JBS_PT_settings(_SessionPanel, bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         settings = context.active_object.jbs
-        layout.prop(settings, "move_mode", expand=True)
-        layout.label(text="Where new rows go")
-        layout.prop(settings, "placement", expand=True)
+
+        box_place = layout.box()
+        box_place.label(text="Where New Rows Go", icon="PLUS")
+        row = box_place.row(align=True)
+        row.prop(settings, "place_at_cursor", toggle=True, icon="TEXT")
+        box_place.prop(settings, "placement", expand=True)
         if settings.placement == "group":
-            layout.prop(settings, "new_group", icon="GROUP_VERTEX")
-        layout.prop(settings, "auto_names")
-        layout.prop(settings, "node_prefix")
-        layout.prop(settings, "live_apply")
-        layout.prop(settings, "apply_on_exit")
-        layout.prop(settings, "allow_shared")
+            box_place.prop(settings, "new_group", icon="GROUP_VERTEX")
+
+        box_node = layout.box()
+        box_node.label(text="Node Naming & Coords", icon="SORTALPHA")
+        box_node.prop(settings, "move_mode", expand=True)
+        col = box_node.column(align=True)
+        col.prop(settings, "auto_names")
+        col.prop(settings, "node_prefix")
+
+        box_sync = layout.box()
+        box_sync.label(text="Synchronization", icon="FILE_REFRESH")
+        col = box_sync.column(align=True)
+        col.prop(settings, "live_apply")
+        col.prop(settings, "apply_on_exit")
+        col.prop(settings, "allow_shared")
 
 
 def _raw_cell(entry, key: str) -> str | None:
@@ -380,23 +405,37 @@ class JBS_PT_tools(_SessionPanel, bpy.types.Panel):
         layout = self.layout
         obj = context.active_object
         session = sessions.session_of(obj)
-        column = layout.column(align=True)
-        column.operator("jbs.rename_node", icon="SORTALPHA")
-        column.operator("jbs.rename_nodes", icon="LINENUMBERS_ON")
-        box = layout.box()
-        row = box.row(align=True)
+
+        box_edit = layout.box()
+        box_edit.label(text="Edit & Clipboard", icon="EDITMODE_HLT")
+        row = box_edit.row(align=True)
+        row.operator("jbs.copy_nodes", icon="COPYDOWN", text="Copy")
+        row.operator("jbs.cut_nodes", icon="REMOVE", text="Cut")
+        row.operator("jbs.delete_nodes", icon="TRASH", text="Delete")
+        row = box_edit.row(align=True)
+        row.operator("jbs.rename_node", icon="SORTALPHA", text="Rename")
+        row.operator("jbs.rename_nodes", icon="LINENUMBERS_ON", text="Batch Rename")
+
+        box_mirror = layout.box()
+        box_mirror.label(text="Symmetry & Mirror", icon="MOD_MIRROR")
+        col = box_mirror.column(align=True)
+        row = col.row(align=True)
         row.prop(obj.jbs, "mirror_axis", expand=True)
         row.prop(obj.jbs, "mirror_plane", text="")
-        box.operator("jbs.mirror", icon="MOD_MIRROR")
+        col.operator("jbs.mirror", icon="MOD_MIRROR", text="Mirror Selected Nodes")
         if obj.mode == "EDIT":
-            row = box.row(align=True)
-            row.label(text="Mirror Moves")
+            col_sym = box_mirror.column(align=True)
+            col_sym.label(text="Live Mesh Symmetry:")
+            row = col_sym.row(align=True)
             for axis in "xyz":
                 row.prop(obj.data, f"use_mirror_{axis}", text=axis.upper(), toggle=True)
-        column = layout.column(align=True)
-        column.operator("jbs.flip_faces", icon="UV_SYNC_SELECT")
-        column.operator("jbs.select_part", icon="RESTRICT_SELECT_OFF")
-        column.operator("jbs.add_resets", icon="LOOP_BACK")
+
+        box_mesh = layout.box()
+        box_mesh.label(text="Mesh Operations", icon="MESH_DATA")
+        col_mesh = box_mesh.column(align=True)
+        col_mesh.operator("jbs.flip_faces", icon="UV_SYNC_SELECT")
+        col_mesh.operator("jbs.select_part", icon="RESTRICT_SELECT_OFF")
+        col_mesh.operator("jbs.add_resets", icon="LOOP_BACK")
 
 
 class JBS_PT_diagnostics(_SessionPanel, bpy.types.Panel):
@@ -460,7 +499,9 @@ class JBS_PT_text(_Panel, bpy.types.Panel):
         if session is not None:
             layout.operator("jbs.show_text", icon="TEXT")
         display = view.settings(context)
-        column = layout.column(align=True)
+        box = layout.box()
+        box.label(text="Text Sync & Highlighting", icon="TEXT")
+        column = box.column(align=True)
         row = column.row(align=True)
         row.prop(display, "text_highlight", toggle=True, icon="SELECT_SET")
         row.prop(display, "text_follow", toggle=True, icon="VIEWZOOM")
@@ -493,17 +534,23 @@ def _gradient(layout, display) -> None:
 
 
 def draw_display(layout, display) -> None:
-    layout.prop(display, "scope", expand=True)
-    row = layout.row(align=True)
+    box = layout.box()
+    box.label(text="Visibility & Scope", icon="RESTRICT_VIEW_OFF")
+    box.prop(display, "scope", expand=True)
+    row = box.row(align=True)
     row.active = display.scope != "ALL"
     row.prop(display, "dim_others", toggle=True, icon="GHOST_ENABLED")
     sub = row.row(align=True)
     sub.active = display.dim_others and display.scope != "ALL"
     sub.prop(display, "dim_opacity", text="", slider=True)
-    row = layout.row(align=True)
-    row.prop(display, "through_faces", toggle=True, icon="MOD_WIREFRAME")
-    row.prop(display, "legend", toggle=True, icon="PRESET")
-    layout.prop(display, "line_opacity", slider=True)
+
+    col = box.column(align=True)
+    row = col.row(align=True)
+    row.prop(display, "occlude_selection", text="Only Visible", toggle=True, icon="VIS_SEL_11")
+    row.prop(display, "through_faces", text="Through Faces", toggle=True, icon="MOD_WIREFRAME")
+    row = col.row(align=True)
+    row.prop(display, "legend", text="Show Legend", toggle=True, icon="PRESET")
+    row.prop(display, "line_opacity", text="Opacity", slider=True)
 
 
 def draw_display_beams(layout, display) -> None:

@@ -89,6 +89,16 @@ def test_delete_nodes_needs_confirmation_for_dependents(car):
     assert ("b1l", "b2") not in {(b.id1, b.id2) for b in session.vehicle.beams}
 
 
+def test_delete_nodes_keep_dependents(car):
+    session = session_for(car)
+    session.delete_nodes(["b2"], keep_dependents=True)
+    assert "b2" not in session.vehicle.nodes
+    assert '["b2"' not in session.text_of(car / "body.jbeam")
+    assert '["b1l", "b2"]' in session.text_of(car / "body.jbeam")
+    assert '["b1l", "b1r", "b2"]' in session.text_of(car / "body.jbeam")
+    assert any("b2" in d.message for d in session.vehicle.diagnostics)
+
+
 def test_delete_and_flip_entries(car):
     session = session_for(car)
     session.flip_faces(session.vehicle.triangles)

@@ -13,6 +13,7 @@ import bpy
 from ..core.assembly import BeamEntry, FaceEntry, NodeEntry
 from ..core.assembly.index import parts_in_file
 from ..core.edit import EditError, EditSession, ExternalChangeError, MoveMode
+from ..core import mesh_sync
 from ..core.mesh_sync import MeshLink, SyncPlan
 from ..core.edit.text import merge_texts
 from ..core.model.files import load_source_file, read_text
@@ -38,6 +39,7 @@ class Group:
         """The object of each part, by part name; "" for an object of the whole vehicle from an older version."""
         self.changed_on_disk: list[Path] = []
         self.save_error: str | None = None
+        self.cursor_warning: str | None = None
         """Why the last automatic save failed."""
         self.saved_at: float | None = None
         """When files were last written, by a save or an automatic save."""
@@ -64,6 +66,7 @@ class ObjectSession:
     path = _shared("path")
     changed_on_disk = _shared("changed_on_disk")
     save_error = _shared("save_error")
+    cursor_warning = _shared("cursor_warning")
     saved_at = _shared("saved_at")
     saved_files = _shared("saved_files")
 
@@ -350,6 +353,15 @@ def selected_entries(obj, session: ObjectSession, select_mode) -> list[NodeEntry
     Entries of the active element come first. Edges and faces count only while they still join the nodes of
     their beams and faces, so unapplied mesh edits do not point at the wrong rows.
     """
+    if obj.mode != "EDIT":
+        selected_indices = mesh_io.selected_vertices(obj)
+        if not selected_indices:
+            return []
+        data_uids = mesh_io._read(obj.data, mesh_io.NODE_UID, "POINT", len(obj.data.vertices)).tolist()
+        uids = {data_uids[i] for i in selected_indices if i < len(data_uids)}
+        id_map = session.link.map.ids
+        vehicle = session.edit.vehicle
+        return [vehicle.nodes[id_map[u]] for u in uids if u in id_map and id_map[u] in vehicle.nodes]
     bm, uid_layer, check_layer, edge_layer = mesh_io.edit_mesh_uids(obj)
     if uid_layer is None or check_layer is None:
         return []
@@ -673,6 +685,38 @@ def in_sync(obj, session: ObjectSession) -> bool:
     return obj.mode != "EDIT" and session.built == mesh_io.fingerprint(obj) and mesh_io.mesh_rev(obj) == session.link.rev
 
 
+def get_cursor_target(session: ObjectSession) -> tuple[str | None, str | None, int | None]:
+    """Finds the (part_name, section, anchor_idx) at the text cursor position for this session."""
+    text = None
+    space = getattr(bpy.context, "space_data", None) if bpy.context else None
+    if space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text:
+        if space.text.get(TEXT_SESSION) == session.key:
+            text = space.text
+    if text is None:
+        wm = getattr(bpy.context, "window_manager", None) if bpy.context else None
+        if wm:
+            for window in wm.windows:
+                for area in window.screen.areas:
+                    if area.type == "TEXT_EDITOR" and area.spaces.active and area.spaces.active.text:
+                        t = area.spaces.active.text
+                        if t.get(TEXT_SESSION) == session.key:
+                            text = t
+                            break
+                if text is not None:
+                    break
+    if text is None:
+        for t in bpy.data.texts:
+            if t.get(TEXT_SESSION) == session.key:
+                text = t
+                break
+    if text is None or not text.get(TEXT_PATH):
+        return None, None, None
+    path = Path(text[TEXT_PATH])
+    line = text.current_line_index
+    col = text.current_character
+    return mesh_sync.find_cursor_target(session.edit, path, line, col)
+
+
 def mirror(obj, session: ObjectSession, follow: bool = True) -> bool:
     """Brings the session to what the mesh shows: the state the mesh was built from, plus the mesh's edits.
 
@@ -696,9 +740,20 @@ def mirror(obj, session: ObjectSession, follow: bool = True) -> bool:
         if not plan.empty:
             settings = obj.jbs
             session.edit.move_mode = MoveMode(settings.move_mode)
+            node_mode = True
+            if obj.mode == "EDIT":
+                tool_settings = getattr(bpy.context, "tool_settings", None) if bpy.context else None
+                if tool_settings and hasattr(tool_settings, "mesh_select_mode"):
+                    node_mode = bool(tool_settings.mesh_select_mode[0])
+            placement = "cursor" if settings.place_at_cursor else settings.placement
+            cursor_target = None
+            if placement == "cursor":
+                cursor_target = get_cursor_target(session)
             session.new_ids = session.link.apply(
                 plan, settings.active_part or None, settings.node_prefix or "n", settings.allow_shared,
-                settings.auto_names, settings.placement, settings.new_group.strip() or None, active_vertex(obj))
+                settings.auto_names, placement, settings.new_group.strip() or None, active_vertex(obj),
+                keep_dependents=node_mode, cursor_target=cursor_target)
+            session.cursor_warning = session.link.last_cursor_warning
     except EditError as error:
         session.error = str(error)
         raise
@@ -739,6 +794,8 @@ def apply_live(obj, session: ObjectSession) -> bool:
         changed = mirror(obj, session)
         sync_others(session)
     autosave(obj, session)
+    if changed:
+        refresh_texts(session)
     return changed
 
 
@@ -761,6 +818,8 @@ def commit_edit_mesh(obj, session: ObjectSession) -> bool:
         mesh_io.stamp(edited, session.link, view.last_plan, view.new_ids)
         view.mirrored = mesh_io.fingerprint(edited)
     sync_others(session)
+    if changed:
+        refresh_texts(session)
     return changed
 
 
@@ -885,3 +944,74 @@ def apply_text(obj, session: ObjectSession, text) -> None:
     text[TEXT_SHOWN] = _digest(text.as_string())
     rebuild(obj, session)
     autosave(obj, session)
+
+
+TEXT_APPLY_DELAY = 0.35
+_text_mod_times: dict[str, float] = {}
+_text_last_contents: dict[str, str] = {}
+
+
+def check_auto_apply_texts() -> bool:
+    """Automatically applies valid text edits to the 3D meshes and session when auto-save is enabled."""
+    if not auto_save_enabled():
+        _text_mod_times.clear()
+        _text_last_contents.clear()
+        return False
+
+    now = time.monotonic()
+    changed_any = False
+
+    for text in list(bpy.data.texts):
+        key = text.get(TEXT_SESSION)
+        if not key or key not in SESSIONS:
+            continue
+        group = SESSIONS[key]
+        if not text_edited(text):
+            _text_mod_times.pop(text.name, None)
+            _text_last_contents.pop(text.name, None)
+            continue
+
+        raw = text.as_string()
+        if _text_last_contents.get(text.name) != raw:
+            _text_last_contents[text.name] = raw
+            _text_mod_times[text.name] = now
+            continue
+
+        last_time = _text_mod_times.get(text.name, 0.0)
+        if now - last_time < TEXT_APPLY_DELAY:
+            continue
+
+        path_str = text.get(TEXT_PATH)
+        if not path_str:
+            continue
+        path = Path(path_str)
+        content = raw
+        if "\r\n" in group.edit.text_of(path):
+            content = content.replace("\n", "\r\n")
+
+        from ..core.sjson import parse
+        doc = parse(content, str(path))
+        if doc.diagnostics.has_errors():
+            continue
+
+        active = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
+        active_sess = session_of(active) if active else None
+        target_session = active_sess if (active_sess and active_sess.group is group) else next(iter(group.views.values()), None)
+        if target_session is None:
+            continue
+        obj = object_of(target_session)
+        if obj is None:
+            continue
+
+        try:
+            apply_text(obj, target_session, text)
+            _text_mod_times.pop(text.name, None)
+            _text_last_contents.pop(text.name, None)
+            changed_any = True
+        except EditError:
+            pass
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    return changed_any

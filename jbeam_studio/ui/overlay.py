@@ -1056,6 +1056,7 @@ def draw_header(self, context) -> None:
     objects are open."""
     if sessions.SESSIONS:
         row = self.layout.row(align=True)
+        row.prop(settings(context), "occlude_selection", text="", icon="VIS_SEL_11")
         row.prop(settings(context), "through_faces", text="", icon="MOD_WIREFRAME")
         row.popover(panel="JBS_PT_overlay", text="JBeam")
 

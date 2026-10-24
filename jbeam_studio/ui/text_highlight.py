@@ -111,8 +111,127 @@ def entry_at(session, path: str, line: int, column: int):
     return None
 
 
+def entries_in_range(session, path: str, start_line: int, start_col: int, end_line: int, end_col: int) -> list[tuple[str, object]]:
+    """All nodes, beams, faces or extras whose rows overlap with the text selection range."""
+    text = session.edit.text_of(Path(path))
+    starts = [0] + [m.end() for m in re.finditer("\n", text)]
+    if not starts:
+        return []
+
+    (sl, sc), (el, ec) = min((start_line, start_col), (end_line, end_col)), max((start_line, start_col), (end_line, end_col))
+    if sl >= len(starts):
+        return []
+
+    s_line_len = (starts[sl + 1] - starts[sl]) if sl + 1 < len(starts) else len(text) - starts[sl]
+    start_offset = starts[sl] + min(sc, s_line_len)
+
+    if el < len(starts):
+        e_line_len = (starts[el + 1] - starts[el]) if el + 1 < len(starts) else len(text) - starts[el]
+        end_offset = starts[el] + min(ec, e_line_len)
+    else:
+        end_offset = len(text)
+
+    if start_offset >= end_offset:
+        return []
+
+    _row_starts, rows = rows_of(session, path_key(path))
+    matched = []
+    for r_start, r_end, kind, entry in rows:
+        if r_end > start_offset and r_start < end_offset:
+            matched.append((kind, entry))
+    return matched
+
+
+def select_entries_multi(obj, session, matched: list[tuple[str, object]], tool_settings) -> bool:
+    """Selects multiple entries in the edit mesh, prioritizing nodes when present."""
+    if not matched:
+        return False
+    link = session.link
+    nodes = [entry for kind, entry in matched if kind == "nodes"]
+    beams = [entry for kind, entry in matched if kind == "beams"]
+    faces = [entry for kind, entry in matched if kind == "faces"]
+
+    if obj.mode == "EDIT":
+        bm = bmesh.from_edit_mesh(obj.data)
+        if nodes:
+            node_uids = {link.map.nodes[n.id] for n in nodes if n.id in link.map.nodes}
+            layer = bm.verts.layers.int.get(mesh_io.NODE_UID)
+            if layer is None:
+                return False
+            tool_settings.mesh_select_mode = (True, False, False)
+            for element in (*bm.verts, *bm.edges, *bm.faces):
+                element.select = False
+            bm.select_history.clear()
+            first_vert = None
+            for v in bm.verts:
+                if v[layer] in node_uids:
+                    v.select_set(True)
+                    if first_vert is None:
+                        first_vert = v
+            if first_vert is not None:
+                bm.select_history.add(first_vert)
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+            return True
+        elif beams:
+            groups = link.map.beams
+            listing = session.edit.vehicle.beams
+            beam_set = set(beams)
+            wanted_uids = {uid for uid, g in groups.items() if any(listing[i] in beam_set for i in g.indices)}
+            layer = bm.edges.layers.int.get(mesh_io.BEAM_UID)
+            if layer is None:
+                return False
+            tool_settings.mesh_select_mode = (False, True, False)
+            for element in (*bm.verts, *bm.edges, *bm.faces):
+                element.select = False
+            bm.select_history.clear()
+            first_edge = None
+            for e in bm.edges:
+                if e[layer] in wanted_uids:
+                    e.select_set(True)
+                    if first_edge is None:
+                        first_edge = e
+            if first_edge is not None:
+                bm.select_history.add(first_edge)
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+            return True
+        elif faces:
+            groups = link.map.faces
+            listing = session.edit.vehicle.triangles + session.edit.vehicle.quads
+            face_set = set(faces)
+            wanted_uids = {uid for uid, g in groups.items() if any(listing[i] in face_set for i in g.indices)}
+            layer = bm.faces.layers.int.get(mesh_io.FACE_UID)
+            if layer is None:
+                return False
+            tool_settings.mesh_select_mode = (False, False, True)
+            for element in (*bm.verts, *bm.edges, *bm.faces):
+                element.select = False
+            bm.select_history.clear()
+            first_face = None
+            for f in bm.faces:
+                if f[layer] in wanted_uids:
+                    f.select_set(True)
+                    if first_face is None:
+                        first_face = f
+            if first_face is not None:
+                bm.select_history.add(first_face)
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+            return True
+    else:
+        if nodes:
+            node_uids = {link.map.nodes[n.id] for n in nodes if n.id in link.map.nodes}
+            data_uids = mesh_io._read(obj.data, mesh_io.NODE_UID, "POINT", len(obj.data.vertices)).tolist()
+            indices = [i for i, uid in enumerate(data_uids) if uid in node_uids]
+            mesh_io.select_vertices(obj.data, indices)
+            obj.data.update()
+            return True
+    return False
+
+
 def _select_from_text(window, obj, session, wm) -> bool:
-    """Selects in the viewport the node, beam or face whose row the user clicked in the text; True if it did."""
+    """Selects in the viewport the node, beam or face whose row(s) the user clicked or selected in the text; True if it did."""
     for _window, _area, space in _text_spaces(wm):
         text = space.text
         if text.get(sessions.TEXT_SESSION) != session.key or sessions.text_edited(text):
@@ -120,15 +239,33 @@ def _select_from_text(window, obj, session, wm) -> bool:
         cursor = (text.select_end_line_index, text.select_end_character, text.current_line_index,
                   text.current_character)
         previous, _cursors[text.name] = _cursors.get(text.name), cursor
-        if previous is None or previous == cursor or _placed.get(text.name) == cursor[:2] or cursor[:2] != cursor[2:]:
+        if previous is None or previous == cursor:
             continue
-        found = entry_at(session, text[sessions.TEXT_PATH], cursor[0], cursor[1])
-        if found is not None and select_entry(obj, session, *found, window.scene.tool_settings):
-            return True
+        if cursor[:2] == cursor[2:] and _placed.get(text.name) == cursor[:2]:
+            continue
+        _placed[text.name] = None
+        if cursor[:2] != cursor[2:]:
+            matched = entries_in_range(session, text[sessions.TEXT_PATH], *cursor)
+            if matched and select_entries_multi(obj, session, matched, window.scene.tool_settings):
+                return True
+        else:
+            found = entry_at(session, text[sessions.TEXT_PATH], cursor[0], cursor[1])
+            if found is not None and select_entry(obj, session, *found, window.scene.tool_settings):
+                return True
     return False
 
 
 def select_entry(obj, session, kind: str, entry, tool_settings) -> bool:
+    if obj.mode != "EDIT":
+        if kind == "nodes":
+            uid = session.link.map.nodes.get(entry.id)
+            if uid is not None:
+                data_uids = mesh_io._read(obj.data, mesh_io.NODE_UID, "POINT", len(obj.data.vertices)).tolist()
+                indices = [i for i, u in enumerate(data_uids) if u == uid]
+                mesh_io.select_vertices(obj.data, indices)
+                obj.data.update()
+                return True
+        return False
     bm = bmesh.from_edit_mesh(obj.data)
     link = session.link
     if kind == "extras":
@@ -174,22 +311,10 @@ def select_entry(obj, session, kind: str, entry, tool_settings) -> bool:
 
 
 def _reveal(window, area, space, band) -> None:
-    """Puts the text cursor at the start of the row; moving the cursor with an operator also scrolls sideways.
-
-    The row is not selected as text, so typing after a click cannot replace it.
-    """
-    line, column, _end_line, _end_column = band
+    """Selects the row in the text editor and scrolls to it."""
+    line, column, end_line, end_column = band
     text = space.text
-    region = next((r for r in area.regions if r.type == "WINDOW"), None)
-    text.cursor_set(line, character=column)
-    if region is not None:
-        try:
-            with bpy.context.temp_override(window=window, area=area, region=region):
-                bpy.ops.text.move(type="NEXT_CHARACTER")
-                bpy.ops.text.move(type="PREVIOUS_CHARACTER")
-        except RuntimeError:
-            pass
-    text.cursor_set(line, character=column)
+    text.select_set(line, column, end_line, end_column)
     _placed[text.name] = (line, column)
     _cursors[text.name] = (text.select_end_line_index, text.select_end_character, text.current_line_index,
                            text.current_character)
@@ -233,11 +358,11 @@ def _update() -> None:
     window = wm.windows[0]
     obj = window.view_layer.objects.active
     session = sessions.session_of(obj)
-    if session is None or obj.mode != "EDIT" or session.stale:
+    if session is None or session.stale:
         _set({}, None, wm)
         return
     clicked = display.text_select and _select_from_text(window, obj, session, wm)
-    select_mode = tuple(window.scene.tool_settings.mesh_select_mode)
+    select_mode = tuple(window.scene.tool_settings.mesh_select_mode) if obj.mode == "EDIT" else (True, False, False)
     highlights, first = bands(session, sessions.selected_entries(obj, session, select_mode))
     moved = first != _first
     _set(highlights, first, wm)

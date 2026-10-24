@@ -90,6 +90,18 @@ def test_deleted_vertex_deletes_the_node_and_its_beams(car):
     assert not [b for b in vehicle.beams if "b2" in (b.id1, b.id2)] and not vehicle.triangles
 
 
+def test_deleted_vertex_keeps_beams_when_keep_dependents(car):
+    link = link_for(car)
+    data = without_vertex(link.build(), vertex_of(link, link.build(), "b2"))
+    plan = link.plan(data)
+    assert plan.deleted_nodes == ["b2"]
+    link.apply(plan, "car_body", keep_dependents=True)
+    assert '["b2"' not in link.session.text_of(car / "body.jbeam")
+    assert '["b1l", "b2"]' in link.session.text_of(car / "body.jbeam")
+    assert '["b1l", "b1r", "b2"]' in link.session.text_of(car / "body.jbeam")
+    assert any("b2" in d.message for d in link.session.vehicle.diagnostics)
+
+
 def test_new_vertex_and_edge_become_a_node_and_a_beam(car):
     link = link_for(car)
     data = link.build()

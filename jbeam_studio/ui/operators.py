@@ -304,6 +304,8 @@ class JBS_OT_apply_mesh(_SessionPoll, bpy.types.Operator):
         plan = session.last_plan
         self.report({"INFO"}, plan_summary(plan) if plan is not None and not plan.empty else tr("Nothing to apply"))
         report_save_problem(self, session)
+        if session.cursor_warning:
+            self.report({"WARNING"}, tr(session.cursor_warning))
         return {"FINISHED"}
 
 
@@ -490,6 +492,8 @@ class JBS_OT_rename_node(_SessionPoll, bpy.types.Operator):
             return {"CANCELLED"}
         sessions.after_change(obj, session, renames={self.new_id: self.old_id})
         report_save_problem(self, session)
+        if session.cursor_warning:
+            self.report({"WARNING"}, tr(session.cursor_warning))
         return {"FINISHED"}
 
 
@@ -540,6 +544,8 @@ class JBS_OT_rename_nodes(_EditModePoll, bpy.types.Operator):
             return {"CANCELLED"}
         sessions.after_change(obj, session, renames={new: old for old, new in renames.items()})
         report_save_problem(self, session)
+        if session.cursor_warning:
+            self.report({"WARNING"}, tr(session.cursor_warning))
         return {"FINISHED"}
 
 
@@ -586,6 +592,8 @@ class JBS_OT_mirror(_SessionPoll, bpy.types.Operator):
             added=len(result.added), moved=len(result.moved), beams=result.beams, faces=result.faces,
             extras=result.extras))
         report_save_problem(self, session)
+        if session.cursor_warning:
+            self.report({"WARNING"}, tr(session.cursor_warning))
         return {"FINISHED"}
 
 
@@ -716,6 +724,8 @@ class JBS_OT_fix(_SessionPoll, bpy.types.Operator):
             done.append(tr("resets added to {parts}").format(parts=", ".join(result.resets)))
         self.report({"INFO"}, tr("Fixed: {done}").format(done="; ".join(done)) if done else tr("Nothing to fix"))
         report_save_problem(self, session)
+        if session.cursor_warning:
+            self.report({"WARNING"}, tr(session.cursor_warning))
         return {"FINISHED"}
 
 
@@ -1317,6 +1327,8 @@ class JBS_OT_apply_text(_SessionPoll, bpy.types.Operator):
                 self.report({"ERROR"}, str(error))
                 return {"CANCELLED"}
         report_save_problem(self, session)
+        if session.cursor_warning:
+            self.report({"WARNING"}, tr(session.cursor_warning))
         return {"FINISHED"}
 
 
@@ -1334,6 +1346,25 @@ class JBS_OT_discard_text(_SessionPoll, bpy.types.Operator):
         if text is None or text.get(sessions.TEXT_SESSION) != session.key:
             return {"CANCELLED"}
         sessions.show_text(session, Path(text[sessions.TEXT_PATH]))
+        return {"FINISHED"}
+
+
+class JBS_OT_filter_visible_selection(_EditModePoll, bpy.types.Operator):
+    bl_idname = "jbs.filter_visible_selection"
+    bl_label = "Select Visible Only"
+    bl_description = "Deselect nodes that are hidden behind other objects or faces from the current view"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        from ..blender import selection
+        region_3d, _space, _win = selection.find_viewport(context)
+        if region_3d is None:
+            self.report({"WARNING"}, tr("No active 3D viewport found"))
+            return {"CANCELLED"}
+        obj = context.active_object
+        changed = selection.filter_visible_selection(obj, region_3d)
+        if changed:
+            context.area.tag_redraw()
         return {"FINISHED"}
 
 
@@ -1370,9 +1401,341 @@ class JBS_OT_extract_vehicles(bpy.types.Operator):
         return {"FINISHED"}
 
 
+_last_copied: str = ""
+
+
+def _get_target_nodes(context):
+    obj, session = active(context)
+    if session is None:
+        space = getattr(context, "space_data", None)
+        if space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text:
+            key = space.text.get(sessions.TEXT_SESSION)
+            if key in sessions.SESSIONS:
+                group = sessions.SESSIONS[key]
+                if group.views:
+                    target_view = next(iter(group.views.values()), None)
+                    if target_view:
+                        obj = sessions.object_of(target_view)
+                        session = target_view
+
+    if session is None or obj is None:
+        return obj, session, []
+
+    texts = []
+    space = getattr(context, "space_data", None)
+    if space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text:
+        texts.append(space.text)
+    for t in list(bpy.data.texts):
+        if t not in texts and t.get(sessions.TEXT_SESSION) == session.key:
+            texts.append(t)
+
+    # 1. Selection in Text Editor
+    for text in texts:
+        if (text.select_end_line_index != text.current_line_index or
+                text.select_end_character != text.current_character):
+            from . import text_highlight
+            matched = text_highlight.entries_in_range(
+                session, text[sessions.TEXT_PATH],
+                text.select_end_line_index, text.select_end_character,
+                text.current_line_index, text.current_character
+            )
+            elements = list(dict.fromkeys(e for k, e in matched))
+            if elements:
+                return obj, session, elements
+
+    # 2. Selected elements in 3D Viewport (vertices, edges, or faces)
+    tool_settings = getattr(context, "tool_settings", None)
+    mesh_sel = getattr(tool_settings, "mesh_select_mode", (True, False, False)) if tool_settings else (True, False, False)
+    mode = tuple(mesh_sel) if obj.mode == "EDIT" else (True, False, False)
+    entries = sessions.selected_entries(obj, session, mode)
+    if entries:
+        return obj, session, entries
+
+    # 3. Text Editor: highlighted rows from 3D View selection
+    from . import text_highlight
+    if text_highlight._highlights:
+        path = str(session.path) if hasattr(session, "path") else ""
+        if texts:
+            path = texts[0].get(sessions.TEXT_PATH, path)
+        key = (session.key, text_highlight.path_key(path))
+        rows = text_highlight._highlights.get(key, [])
+        if rows:
+            all_matched = []
+            for sl, sc, el, ec in rows:
+                all_matched.extend(text_highlight.entries_in_range(session, path, sl, sc, el, ec))
+            elements = list(dict.fromkeys(e for k, e in all_matched))
+            if elements:
+                return obj, session, elements
+
+    return obj, session, []
+
+
+class JBS_OT_copy_nodes(bpy.types.Operator):
+    bl_idname = "jbs.copy_nodes"
+    bl_label = "Copy Selected Elements"
+    bl_description = "Copy the JBeam text of the selected nodes, beams, or faces to clipboard"
+
+    @classmethod
+    def poll(cls, context):
+        obj, session = active(context)
+        if session is not None:
+            return True
+        space = getattr(context, "space_data", None)
+        return bool(space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text
+                    and space.text.get(sessions.TEXT_SESSION))
+
+    def invoke(self, context, event):
+        obj, session, elements = _get_target_nodes(context)
+        if not elements:
+            if getattr(context.space_data, "type", "") == "TEXT_EDITOR":
+                return {"PASS_THROUGH"}
+            self.report({"WARNING"}, tr("No elements selected"))
+            return {"CANCELLED"}
+        return self.execute(context)
+
+    def execute(self, context):
+        global _last_copied
+        obj, session, elements = _get_target_nodes(context)
+        if not elements:
+            self.report({"WARNING"}, tr("No elements selected"))
+            return {"CANCELLED"}
+        lines = []
+        for e in elements:
+            if getattr(e, "src", None) is not None and e.src.doc is not None:
+                lines.append(e.src.doc.text[e.src.node.start:e.src.node.end])
+            elif hasattr(e, "id") and hasattr(e, "pos"):
+                lines.append(f'["{e.id}", {e.pos[0]:.4f}, {e.pos[1]:.4f}, {e.pos[2]:.4f}]')
+            elif hasattr(e, "id1") and hasattr(e, "id2"):
+                lines.append(f'["{e.id1}", "{e.id2}"]')
+            elif hasattr(e, "ids"):
+                inner = ", ".join(f'"{i}"' for i in e.ids)
+                lines.append(f'[{inner}]')
+        if not lines:
+            self.report({"WARNING"}, tr("No text found for selection"))
+            return {"CANCELLED"}
+        _last_copied = "\n".join(lines)
+        context.window_manager.clipboard = _last_copied
+        self.report({"INFO"}, tr("Copied {count} elements").format(count=len(lines)))
+        return {"FINISHED"}
+
+
+class JBS_OT_delete_nodes(bpy.types.Operator):
+    bl_idname = "jbs.delete_nodes"
+    bl_label = "Delete Selected Elements"
+    bl_description = "Delete the selected nodes, beams, or faces"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj, session = active(context)
+        if session is not None:
+            return True
+        space = getattr(context, "space_data", None)
+        return bool(space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text
+                    and space.text.get(sessions.TEXT_SESSION))
+
+    def invoke(self, context, event):
+        obj, session, elements = _get_target_nodes(context)
+        if not elements:
+            if getattr(context.space_data, "type", "") == "TEXT_EDITOR":
+                return {"PASS_THROUGH"}
+            self.report({"WARNING"}, tr("No elements selected"))
+            return {"CANCELLED"}
+        return self.execute(context)
+
+    def execute(self, context):
+        obj, session, elements = _get_target_nodes(context)
+        if not elements:
+            self.report({"WARNING"}, tr("No elements selected"))
+            return {"CANCELLED"}
+
+        nodes = [e for e in elements if hasattr(e, "id") and hasattr(e, "pos")]
+        beams_and_faces = [e for e in elements if (hasattr(e, "id1") and hasattr(e, "id2")) or hasattr(e, "ids")]
+
+        has_dependents = False
+        if nodes:
+            ids = [e.id for e in nodes]
+            dependents = session.edit.dependents(ids)
+            if dependents:
+                has_dependents = True
+            session.edit.delete_nodes(ids, keep_dependents=True)
+
+        if beams_and_faces:
+            session.edit.delete_entries(beams_and_faces)
+
+        session.link.changed()
+        sessions.rebuild(obj, session)
+        sessions.autosave(obj, session)
+        sessions.refresh_texts(session)
+
+        count = len(nodes) + len(beams_and_faces)
+        if has_dependents:
+            self.report({"WARNING"}, tr("Deleted {count} elements; beams/faces reference missing nodes").format(count=count))
+        else:
+            self.report({"INFO"}, tr("Deleted {count} elements").format(count=count))
+        return {"FINISHED"}
+
+
+_left_idx_cache: dict[int, int] = {}
+
+
+def _get_left_index(st) -> int:
+    ptr = st.as_pointer()
+    if ptr in _left_idx_cache:
+        return _left_idx_cache[ptr]
+    import ctypes
+    buf = (ctypes.c_int32 * 64).from_address(ptr)
+    old_top = st.top
+    test_val = 123456
+    try:
+        st.top = test_val
+        for i in range(64):
+            if buf[i] == test_val:
+                _left_idx_cache[ptr] = i + 1
+                return i + 1
+    finally:
+        st.top = old_top
+    _left_idx_cache[ptr] = 13
+    return 13
+
+
+class JBS_OT_text_scroll_horizontal(bpy.types.Operator):
+    bl_idname = "jbs.text_scroll_horizontal"
+    bl_label = "Scroll Text Horizontally"
+    bl_description = "Scroll the text editor horizontally"
+
+    direction: bpy.props.EnumProperty(
+        items=[
+            ("LEFT", "Left", ""),
+            ("RIGHT", "Right", ""),
+        ],
+        default="RIGHT",
+    )
+    step: bpy.props.IntProperty(default=50)
+
+    @classmethod
+    def poll(cls, context):
+        space = getattr(context, "space_data", None)
+        return bool(space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text)
+
+    def execute(self, context):
+        st = context.space_data
+        idx = _get_left_index(st)
+        import ctypes
+        buf = (ctypes.c_int32 * 64).from_address(st.as_pointer())
+        delta = self.step if self.direction == "RIGHT" else -self.step
+        buf[idx] = max(0, buf[idx] + delta)
+        area = getattr(context, "area", None)
+        if area:
+            area.tag_redraw()
+        return {"FINISHED"}
+
+
+class JBS_OT_cut_nodes(bpy.types.Operator):
+    bl_idname = "jbs.cut_nodes"
+    bl_label = "Cut Selected Nodes"
+    bl_description = "Copy the JBeam text of the selected nodes to clipboard and delete them"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj, session = active(context)
+        if session is not None:
+            return True
+        space = getattr(context, "space_data", None)
+        return bool(space and getattr(space, "type", "") == "TEXT_EDITOR" and space.text
+                    and space.text.get(sessions.TEXT_SESSION))
+
+    def invoke(self, context, event):
+        obj, session, nodes = _get_target_nodes(context)
+        if not nodes:
+            if getattr(context.space_data, "type", "") == "TEXT_EDITOR":
+                return {"PASS_THROUGH"}
+            self.report({"WARNING"}, tr("No elements selected"))
+            return {"CANCELLED"}
+        return self.execute(context)
+
+    def execute(self, context):
+        res = bpy.ops.jbs.copy_nodes()
+        if res == {"FINISHED"}:
+            bpy.ops.jbs.delete_nodes()
+            return {"FINISHED"}
+        return {"CANCELLED"}
+
+
+addon_keymaps = []
+
+
+def register_keymaps():
+    wm = bpy.context.window_manager
+    kc = wm.keyconfigs.addon if wm is not None else None
+    if not kc:
+        return
+    # Mesh (3D View in Edit Mode)
+    km_mesh = kc.keymaps.new(name="Mesh", space_type="EMPTY")
+    kmi = km_mesh.keymap_items.new(JBS_OT_copy_nodes.bl_idname, type="C", value="PRESS", ctrl=True)
+    addon_keymaps.append((km_mesh, kmi))
+    kmi = km_mesh.keymap_items.new(JBS_OT_cut_nodes.bl_idname, type="X", value="PRESS", ctrl=True)
+    addon_keymaps.append((km_mesh, kmi))
+    kmi = km_mesh.keymap_items.new(JBS_OT_delete_nodes.bl_idname, type="DEL", value="PRESS")
+    addon_keymaps.append((km_mesh, kmi))
+
+    # 3D View (Object Mode)
+    km_view3d = kc.keymaps.new(name="3D View", space_type="VIEW_3D")
+    kmi = km_view3d.keymap_items.new(JBS_OT_copy_nodes.bl_idname, type="C", value="PRESS", ctrl=True)
+    addon_keymaps.append((km_view3d, kmi))
+    kmi = km_view3d.keymap_items.new(JBS_OT_cut_nodes.bl_idname, type="X", value="PRESS", ctrl=True)
+    addon_keymaps.append((km_view3d, kmi))
+    kmi = km_view3d.keymap_items.new(JBS_OT_delete_nodes.bl_idname, type="DEL", value="PRESS")
+    addon_keymaps.append((km_view3d, kmi))
+
+    # Text Editor
+    km_text = kc.keymaps.new(name="Text", space_type="TEXT_EDITOR")
+    kmi = km_text.keymap_items.new(JBS_OT_copy_nodes.bl_idname, type="C", value="PRESS", ctrl=True)
+    addon_keymaps.append((km_text, kmi))
+    kmi = km_text.keymap_items.new(JBS_OT_cut_nodes.bl_idname, type="X", value="PRESS", ctrl=True)
+    addon_keymaps.append((km_text, kmi))
+    kmi = km_text.keymap_items.new(JBS_OT_delete_nodes.bl_idname, type="DEL", value="PRESS")
+    addon_keymaps.append((km_text, kmi))
+    # Horizontal scroll with mouse wheel (tilt wheel / horizontal wheel and Shift+Wheel)
+    kmi = km_text.keymap_items.new(JBS_OT_text_scroll_horizontal.bl_idname, type="WHEELRIGHTMOUSE", value="PRESS")
+    kmi.properties.direction = "RIGHT"
+    addon_keymaps.append((km_text, kmi))
+    kmi = km_text.keymap_items.new(JBS_OT_text_scroll_horizontal.bl_idname, type="WHEELLEFTMOUSE", value="PRESS")
+    kmi.properties.direction = "LEFT"
+    addon_keymaps.append((km_text, kmi))
+    kmi = km_text.keymap_items.new(JBS_OT_text_scroll_horizontal.bl_idname, type="WHEELDOWNMOUSE", value="PRESS", shift=True)
+    kmi.properties.direction = "RIGHT"
+    addon_keymaps.append((km_text, kmi))
+    kmi = km_text.keymap_items.new(JBS_OT_text_scroll_horizontal.bl_idname, type="WHEELUPMOUSE", value="PRESS", shift=True)
+    kmi.properties.direction = "LEFT"
+    addon_keymaps.append((km_text, kmi))
+
+
+def unregister_keymaps():
+    for km, kmi in addon_keymaps:
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
+    addon_keymaps.clear()
+
+
 def menu_import(self, _context):
     self.layout.operator(JBS_OT_import_pc.bl_idname, text="JBeam Vehicle (.pc)")
     self.layout.operator(JBS_OT_import_jbeam.bl_idname, text="JBeam Parts (.jbeam)")
+
+
+class JBS_OT_dismiss_cursor_warning(bpy.types.Operator):
+    bl_idname = "jbs.dismiss_cursor_warning"
+    bl_label = "Dismiss warning"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        obj, session = active(context)
+        if session:
+            session.cursor_warning = None
+        return {"FINISHED"}
 
 
 CLASSES = (
@@ -1384,5 +1747,6 @@ CLASSES = (
     JBS_OT_set_extra_property, JBS_OT_set_property,
     JBS_OT_select_by_property, JBS_OT_group_select, JBS_OT_group_hide, JBS_OT_rename_group, JBS_OT_flip_faces,
     JBS_OT_select_part, JBS_OT_show_text, JBS_OT_apply_text,
-    JBS_OT_discard_text, JBS_OT_extract_vehicles,
+    JBS_OT_discard_text, JBS_OT_extract_vehicles, JBS_OT_filter_visible_selection,
+    JBS_OT_copy_nodes, JBS_OT_cut_nodes, JBS_OT_delete_nodes, JBS_OT_text_scroll_horizontal, JBS_OT_dismiss_cursor_warning,
 )

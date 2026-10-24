@@ -45,9 +45,13 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
     dim_opacity: FloatProperty(name="Their opacity", default=0.2, min=0.02, max=1.0, subtype="FACTOR",
                                description="Opacity of the colours of the other JBeam objects")
     through_faces: BoolProperty(
-        name="Through faces", default=False,
+        name="Through faces", default=True,
         description="Draw coloured beams and nodes, hydros, rails and node names of JBeam objects through faces; "
                     "otherwise faces hide them, except in X-ray and wireframe",
+    )
+    occlude_selection: BoolProperty(
+        name="Select only visible", default=True,
+        description="Only select nodes visible from the current view; do not select nodes hidden behind other objects or faces",
     )
     line_opacity: FloatProperty(name="Opacity", default=1.0, min=0.1, max=1.0, subtype="FACTOR",
                                 description="Opacity of everything drawn over the objects")
@@ -68,7 +72,7 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
                ("PART", "Part", "A colour for each part")],
         default="TYPE",
     )
-    normal_beams: BoolProperty(name="Other beams", default=False,
+    normal_beams: BoolProperty(name="Other beams", default=True,
                                description="Also draw the beams that Colour by gives no colour, such as beams of the "
                                            "normal type, in their own colour")
     normal_color: _color("Colour of other beams", game(0, 223, 0))
@@ -97,7 +101,7 @@ class JBS_ViewSettings(bpy.types.PropertyGroup):
     infinite_color: _color("FLT_MAX", game(255, 0, 255), "Values such as FLT_MAX, which do not fit a gradient")
 
     # nodes
-    node_colors: BoolProperty(name="Nodes", default=False, description="Draw nodes in colour, by what Colour by says")
+    node_colors: BoolProperty(name="Nodes", default=True, description="Draw nodes in colour, by what Colour by says")
     node_color_by: EnumProperty(
         name="Colour nodes by",
         items=[("FLAGS", "Flags", "As the game shows nodes: fixed, selfCollision and collision false in their "
@@ -222,7 +226,15 @@ def settings(context=None) -> JBS_ViewSettings:
     from .preferences import preferences
     prefs = preferences()
     display = getattr(prefs, "display", None)
-    return display if display is not None else (context or bpy.context).window_manager.jbs_view
+    if display is None:
+        display = (context or bpy.context).window_manager.jbs_view
+    if not display.get("_v_defaults_on"):
+        display["_v_defaults_on"] = True
+        display.node_colors = True
+        display.normal_beams = True
+        display.through_faces = True
+        display.beam_colors = True
+    return display
 
 
 def panel_state(context=None) -> JBS_PanelState:

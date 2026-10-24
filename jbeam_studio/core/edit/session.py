@@ -917,8 +917,10 @@ class EditSession:
         found += [f for f in self.vehicle.triangles + self.vehicle.quads if set(f.ids) & ids]
         return found
 
-    def delete_nodes(self, node_ids: Iterable[str], cascade: bool = False, allow_shared: bool = False) -> None:
+    def delete_nodes(self, node_ids: Iterable[str], cascade: bool = False, allow_shared: bool = False,
+                     keep_dependents: bool = False) -> None:
         """Deletes nodes; beams, triangles and quads that use them are deleted too when `cascade` is set.
+        When `keep_dependents` is set, dependent beams and faces are kept in the text untouched.
 
         Rows of other sections that reference the nodes stay in the text; the game discards them, and
         `notes` lists the sections affected.
@@ -926,17 +928,20 @@ class EditSession:
         ids = list(dict.fromkeys(node_ids))
         nodes = [self._own_node(node_id) for node_id in ids]
         dependents = self.dependents(ids)
-        if dependents and not cascade:
+        if dependents and not cascade and not keep_dependents:
             raise DependentsError(f"{len(dependents)} beams, triangles or quads use these nodes", dependents)
-        self._check_shared(nodes + dependents, allow_shared)
+        self._check_shared(nodes if keep_dependents else (nodes + dependents), allow_shared)
         edits: dict[Path, list[TextEdit]] = defaultdict(list)
         for node in nodes:
             for path, doc, row, _ in self._definition_rows(node):
                 edits[path].append(delete_value(doc, row))
-        for entry in dependents:
-            path, doc, row = self._row(entry)
-            edits[path].append(delete_value(doc, row))
-        expected = self._removed_by(nodes + dependents)
+        if not keep_dependents:
+            for entry in dependents:
+                path, doc, row = self._row(entry)
+                edits[path].append(delete_value(doc, row))
+            expected = self._removed_by(nodes + dependents)
+        else:
+            expected = self._removed_by(nodes)
         expected.setdefault("nodes", -len(ids))
         self._apply(f"Delete {len(ids)} node(s)", edits, expected=expected, shrinking=True)
 

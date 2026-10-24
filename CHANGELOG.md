@@ -4,6 +4,21 @@
 
 Versions 0.1–0.12 were released before this repository was created.
 
+## 0.19.0
+
+- **Placement at text cursor**: new *At text cursor* option and toggle to insert newly created nodes, beams, and triangles/quads right where the text editor cursor is positioned.
+- **Graceful mismatch handling**: if the text cursor is in a section different from what is being added (e.g. cursor is in `nodes` while adding `beams`), the action is never restricted or cancelled; elements are placed at the end of their table with an informative, dismissible UI warning.
+- **Default display out of the box**: nodes, normal beams, and through-faces are now enabled by default so JBeam structures are immediately visible in color through faces upon importing.
+- **UI layout & grouping overhaul**:
+  - Reorganized main action bar into a clean 2x2 grid (`Apply`, `Save`, `Auto Save`, `At Cursor`) that never gets truncated.
+  - Regrouped `Tools` panel into 3 distinct sections: *Edit & Clipboard*, *Symmetry & Mirror*, and *Mesh Operations*, with full-width live mesh symmetry controls (`X`, `Y`, `Z`).
+  - Improved `Display`, `Editing`, and `Text Editor` panels with dedicated cards and 2-column alignments avoiding text truncation in narrow sidebars.
+- **Extended clipboard and hotkeys**: `Copy`, `Cut`, and `Delete` (`Ctrl+C`, `Ctrl+X`, `Delete`) work seamlessly for beams and faces as well as nodes, both in 3D Viewport and Text Editor selections.
+- **Safer node deletion**: deleting nodes in vertex select mode preserves dependent beams and faces rather than cascading deletions.
+- **Selection raycast occlusion**: new *Only Visible* filter option preventing accidental selection of nodes occluded behind solid faces.
+- **Horizontal scrolling**: added support for mouse horizontal scroll in the text editor.
+- **Blender 4.x / 5.2 compatibility & fixes**: fixed `icon="CUT"` crash by replacing with `icon="REMOVE"`, and fixed black shading / matcap normals artifact after text edits.
+
 ## 0.18.1
 
 - The warning about nodes that other imported parts also have is gone, with its red marks: it also marked the nodes of parts that are never fitted together, such as variants of one wing.
